@@ -462,6 +462,7 @@ class Placeholder(QWidget):
         layout.addWidget(self.body, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addSpacing(18)
         self.buttons = QHBoxLayout()
+        self.buttons.setSpacing(8)  # Nested layouts inherit the parent's zero spacing.
         self.buttons.addStretch()
         self.primary = QPushButton()
         self.primary.setProperty('kind', 'primary')
