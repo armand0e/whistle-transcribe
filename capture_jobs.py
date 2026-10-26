@@ -177,27 +177,8 @@ class Recorder(QThread):
                     'Let desktop apps access your microphone.')
         return message or 'Windows audio capture could not start.'
 
-    def start_captures(self):
-        for command in capture_commands(self.window, self.include_mic):
-            if not Path(command[0]).is_file():
-                raise RuntimeError('The capture helper is missing. Run build-capture.cmd, then try again.')
-            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       creationflags=NO_WINDOW)
-            self.captures.append(process)
-            first = process.stderr.readline().decode('utf-8', 'replace').strip()
-            if first != 'READY':
-                detail = (first + ' ' + process.stderr.read().decode('utf-8', 'replace')).strip() if process.poll() is not None else first
-                raise RuntimeError(self.explain(detail))
-
-    def capture(self, audio_path):
-        self.set_phase('recording')
-        self.start_captures()
-        if self.stopping.is_set():
-            self.stop()
-        self.status.emit('Recording')
-        buffers = [bytearray() for _ in self.captures]
-        ended = [False] * len(self.captures)
-        lock = threading.Lock()
+    def start_captures(self, buffers, ended, lock):
+        """Launch every stream, drain them at once, and align them at the moment the last is ready."""
         def read(index, process):
             while True:
                 block = process.stdout.read1(32768)
@@ -207,9 +188,33 @@ class Recorder(QThread):
                     buffers[index].extend(block)
             with lock:
                 ended[index] = True
-        readers = [threading.Thread(target=read, args=item, daemon=True) for item in enumerate(self.captures)]
-        for reader in readers:
-            reader.start()
+        for index, command in enumerate(capture_commands(self.window, self.include_mic)):
+            if not Path(command[0]).is_file():
+                raise RuntimeError('The capture helper is missing. Run build-capture.cmd, then try again.')
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       creationflags=NO_WINDOW)
+            self.captures.append(process)
+            buffers.append(bytearray())
+            ended.append(False)
+            # Read immediately: an undrained pipe would stall the helper and drop audio.
+            threading.Thread(target=read, args=(index, process), daemon=True).start()
+        for process in self.captures:
+            first = process.stderr.readline().decode('utf-8', 'replace').strip()
+            if first != 'READY':
+                detail = (first + ' ' + process.stderr.read().decode('utf-8', 'replace')).strip() if process.poll() is not None else first
+                raise RuntimeError(self.explain(detail))
+        with lock:
+            # Each helper's clock starts at its own READY; drop the head start so streams line up.
+            for buffer in buffers:
+                buffer.clear()
+
+    def capture(self, audio_path):
+        self.set_phase('recording')
+        buffers, ended, lock = [], [], threading.Lock()
+        self.start_captures(buffers, ended, lock)
+        if self.stopping.is_set():
+            self.stop()
+        self.status.emit('Recording')
         # Only capture here: inference cannot block audio collection.
         with audio_path.open('wb') as storage, wave.open(storage, 'wb') as audio:
             audio.setnchannels(2); audio.setsampwidth(2); audio.setframerate(RATE)

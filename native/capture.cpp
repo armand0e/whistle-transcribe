@@ -41,16 +41,22 @@ public:
     }
 };
 
+[[noreturn]] static void fail(int code) {
+    // _exit, not exit: the stdin thread may hold the CRT lock in getchar(), and exit() would wait on it.
+    fflush(stdout); fflush(stderr);
+    _exit(code);
+}
+
 static void check(HRESULT hr, const char* operation) {
     if (FAILED(hr)) {
         fprintf(stderr, "%s failed (0x%08lX)\n", operation, (unsigned long)hr);
-        exit(2);
+        fail(2);
     }
 }
 
 static void usage() {
     fprintf(stderr, "Usage: capture.exe --app PID | --system EXCLUDED_PID | --mic\n");
-    exit(1);
+    fail(1);
 }
 
 static ComPtr<IAudioClient> process_loopback(DWORD pid, PROCESS_LOOPBACK_MODE mode) {
@@ -67,7 +73,7 @@ static ComPtr<IAudioClient> process_loopback(DWORD pid, PROCESS_LOOPBACK_MODE mo
     check(ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
         __uuidof(IAudioClient), &variant, callback.Get(), &activation), "Activate process audio");
     if (WaitForSingleObject(callback->ready, 15000) != WAIT_OBJECT_0) {
-        fprintf(stderr, "Windows did not activate process audio within 15 seconds.\n"); exit(2);
+        fprintf(stderr, "Windows did not activate process audio within 15 seconds.\n"); fail(2);
     }
     check(callback->result, "Activate process audio result");
     return callback->client;
@@ -80,12 +86,16 @@ static ComPtr<IAudioClient> microphone() {
     ComPtr<IMMDevice> device;
     HRESULT hr = devices->GetDefaultAudioEndpoint(eCapture, eConsole, &device);
     if (hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
-        fprintf(stderr, "No microphone is connected.\n"); exit(2);
+        fprintf(stderr, "No microphone is connected.\n"); fail(2);
     }
     check(hr, "Find default microphone");
     ComPtr<IAudioClient> client;
-    check(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-        reinterpret_cast<void**>(client.GetAddressOf())), "Open microphone");
+    hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(client.GetAddressOf()));
+    if (hr == E_ACCESSDENIED) {
+        fprintf(stderr, "Microphone access denied by Windows privacy settings.\n"); fail(2);
+    }
+    check(hr, "Open microphone");
     return client;
 }
 
@@ -122,7 +132,7 @@ int main(int argc, char** argv) {
         : AUDCLNT_STREAMFLAGS_LOOPBACK);
     HRESULT initialized = client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 200000, 0, &format, nullptr);
     if (source == Mic && initialized == E_ACCESSDENIED) {
-        fprintf(stderr, "Microphone access denied by Windows privacy settings.\n"); return 2;
+        fprintf(stderr, "Microphone access denied by Windows privacy settings.\n"); fail(2);
     }
     check(initialized, source == Mic ? "Initialize microphone" : "Initialize process audio");
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
