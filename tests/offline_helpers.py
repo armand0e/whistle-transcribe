@@ -9,6 +9,9 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+# Windows consoles default to cp1252, which cannot print the arrows in test names.
+for stream in (sys.stdout, sys.stderr):
+    stream.reconfigure(encoding='utf-8', errors='replace')
 OUTPUT = ROOT / 'test-output' / 'offline'
 
 import capture_jobs
