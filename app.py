@@ -1,472 +1,614 @@
-"""Whistle: a small, always-on-top audio transcription pill for Windows."""
-import logging
+"""Whistle: record any app, your PC, or your microphone, and transcribe it locally."""
+import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import sys
-import time
 
-from PySide6.QtCore import Qt, QTimer, QUrl, QLockFile, QStandardPaths
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-    QTextEdit, QVBoxLayout, QWidget, QFileDialog)
+from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QTimer, Qt, QLockFile
+from PySide6.QtGui import QIcon, QPalette
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from transcriber import ROOT, timestamp
-from capture_jobs import Recorder, HelperJob
-from model_catalog import BY_KEY, model_path, validate_choice
-from model_picker import ModelPicker
-from windows_audio import list_windows, window_exists, Window
+import theme
+from capture_jobs import HelperJob, Recorder
+from library import Library
+from model_catalog import BY_KEY, LANGUAGES, MODELS, ROOT, model_path, supports_language, validate_choice
+from pill import Pill
+from preferences import Preferences
+from settings_dialog import SettingsWindow
+from source_picker import SourcePicker, app_pixmap
+from welcome import Welcome
+from windows_audio import MICROPHONE, SYSTEM_AUDIO, Window, list_windows, window_exists
 
-STYLE = '''
-QWidget { color: #f0f3f6; font-family: 'Segoe UI'; font-size: 13px; }
-QDialog, QMenu, Document { background: #1a2029; }
-QPushButton { border: 0; border-radius: 15px; padding: 8px 12px; background: #293240; }
-QPushButton:hover { background: #37465a; }
-QPushButton:disabled { color: #6b7787; }
-QLineEdit, QListWidget, QTextEdit, QComboBox, QTreeWidget { background: #111720; border: 1px solid #344052; border-radius: 9px; padding: 10px; }
-QHeaderView::section { background: #293240; padding: 8px; border: 0; color: #c9d6e2; }
-QTreeWidget::item { padding: 8px 3px; }
-QListWidget::item { padding: 10px; border-radius: 6px; }
-QListWidget::item:selected { background: #214b48; }
-QLabel#muted { color: #a7b3c2; }
-QPushButton#record { color: #101e1c; background: #88e4cb; font-weight: 600; }
-QPushButton#stop { color: #fff; background: #a94053; font-weight: 600; }
-'''
+SERVER = 'whistle-' + hashlib.sha1(str(ROOT).casefold().encode()).hexdigest()[:12]
+HOTKEY_ID = 0x5749
 
-class Picker(QDialog):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setWindowTitle('Choose a window · Whistle')
-        self.resize(620, 480)
-        layout = QVBoxLayout(self)
-        heading = QLabel('Which window should Whistle listen to?')
-        heading.setStyleSheet('font-size: 19px; font-weight: 600; padding: 8px 0;')
-        layout.addWidget(heading)
-        self.search = QLineEdit()
-        self.search.setPlaceholderText('Search open windows…')
-        layout.addWidget(self.search)
-        self.windows = QListWidget()
-        layout.addWidget(self.windows)
-        note = QLabel('Captures the selected app and its child processes. Chrome and other\nbrowsers may share audio across tabs and windows. Microphone is off.')
-        note.setObjectName('muted')
-        layout.addWidget(note)
-        row = QHBoxLayout()
-        self.language = QComboBox()
-        for label, value in [('Detect language', None), ('English', 'en'), ('German', 'de'), ('French', 'fr'), ('Spanish', 'es'), ('Italian', 'it'), ('Dutch', 'nl'), ('Polish', 'pl')]:
-            self.language.addItem(label, value)
-        row.addWidget(self.language)
-        refresh = QPushButton('Refresh')
-        refresh.clicked.connect(self.refresh)
-        row.addWidget(refresh)
-        choose = QPushButton('Choose window')
-        choose.setObjectName('record')
-        choose.clicked.connect(self.accept_selected)
-        row.addWidget(choose)
-        layout.addLayout(row)
-        self.search.textChanged.connect(self.filter)
-        self.windows.itemDoubleClicked.connect(self.accept_selected)
-        self.refresh()
+class Hotkey(QAbstractNativeEventFilter):
+    """Ctrl+Alt+R from anywhere on Windows."""
 
-    def refresh(self):
-        self.windows.clear()
-        for window in list_windows():
-            item = QListWidgetItem(f'{window.title}\n{window.app}  ·  PID {window.pid}')
-            item.setData(Qt.ItemDataRole.UserRole, window)
-            self.windows.addItem(item)
-        self.filter()
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+        self.hwnd = None
 
-    def filter(self):
-        query = self.search.text().casefold()
-        for index in range(self.windows.count()):
-            item = self.windows.item(index)
-            item.setHidden(query not in item.text().casefold())
+    def register(self, hwnd):
+        if sys.platform != 'win32':
+            return False
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        self.unregister()
+        if user32.RegisterHotKey(hwnd, HOTKEY_ID, 0x0001 | 0x0002 | 0x4000, ord('R')):  # Alt | Ctrl | NoRepeat
+            self.hwnd = hwnd
+            return True
+        return False
 
-    def accept_selected(self, *_):
-        item = self.windows.currentItem()
-        if item and not item.isHidden():
-            self.selected = item.data(Qt.ItemDataRole.UserRole)
-            self.accept()
+    def unregister(self):
+        if self.hwnd is not None:
+            import ctypes
+            ctypes.windll.user32.UnregisterHotKey(self.hwnd, HOTKEY_ID)
+            self.hwnd = None
 
-class Document(QWidget):
-    def __init__(self):
-        super().__init__(None, Qt.WindowType.Window)
-        self.setWindowTitle('Transcript · Whistle')
-        self.resize(750, 650)
-        self.setStyleSheet(STYLE + 'Document { background: #1a2029; }')
-        layout = QVBoxLayout(self)
-        title = QLabel('Your transcript')
-        title.setStyleSheet('font-size: 23px; font-weight: 600; margin: 12px;')
-        layout.addWidget(title)
-        self.text = QTextEdit()
-        self.text.setReadOnly(True)
-        self.text.setPlaceholderText('Record a window, then press Stop. Your chosen model will create a transcript here.')
-        self.text.setStyleSheet('font-size: 16px; padding: 18px;')
-        layout.addWidget(self.text)
-        self.pending = QLabel('')
-        self.pending.setWordWrap(True)
-        self.pending.setObjectName('muted')
-        layout.addWidget(self.pending)
-        self.path = None
-        row = QHBoxLayout()
-        for label, callback in [('Open document', self.open_file), ('Show folder', self.open_folder)]:
-            button = QPushButton(label)
-            button.clicked.connect(callback)
-            row.addWidget(button)
-        layout.addLayout(row)
+    def nativeEventFilter(self, event_type, message):
+        name = event_type.data() if hasattr(event_type, 'data') else bytes(event_type)
+        if self.hwnd is not None and name == b'windows_generic_MSG':
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0312 and msg.wParam == HOTKEY_ID:
+                QTimer.singleShot(0, self.callback)
+                return True, 0
+        return False, 0
 
-    def update_text(self, text, pending):
-        scroll = self.text.verticalScrollBar()
-        follow = scroll.value() >= scroll.maximum() - 30
-        self.text.setPlainText(text)
-        if follow:
-            scroll.setValue(scroll.maximum())
-        self.pending.setText(('Live: ' + pending) if pending else '')
+def palette():
+    t = theme.tokens()
+    result = QPalette()
+    roles = {QPalette.ColorRole.Window: 'window', QPalette.ColorRole.WindowText: 'text', QPalette.ColorRole.Base: 'raised',
+             QPalette.ColorRole.AlternateBase: 'grouped', QPalette.ColorRole.Text: 'text', QPalette.ColorRole.Button: 'control',
+             QPalette.ColorRole.ButtonText: 'text', QPalette.ColorRole.Highlight: 'accent',
+             QPalette.ColorRole.HighlightedText: 'on_accent', QPalette.ColorRole.ToolTipBase: 'raised',
+             QPalette.ColorRole.ToolTipText: 'text', QPalette.ColorRole.PlaceholderText: 'tertiary',
+             QPalette.ColorRole.Link: 'accent', QPalette.ColorRole.Mid: 'separator'}
+    for role, name in roles.items():
+        result.setColor(role, theme.parse(t[name]))
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+        result.setColor(QPalette.ColorGroup.Disabled, role, theme.parse(t['tertiary']))
+    return result
 
-    def open_file(self):
-        if self.path:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self.path))
+def alert(parent, title, text, buttons=(('OK', 'primary'),)):
+    """A calm, app-styled alert. Returns the label of the chosen button."""
+    box = QMessageBox(parent)
+    box.setWindowTitle('Whistle')
+    box.setIconPixmap(theme.app_icon(128).scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    box.setText(title)
+    box.setInformativeText(text)
+    choices = {}
+    for index, (text_label, kind) in enumerate(buttons):
+        role = QMessageBox.ButtonRole.RejectRole if kind == 'cancel' else QMessageBox.ButtonRole.AcceptRole
+        button = box.addButton(text_label, role)
+        if kind in ('primary', 'destructive'):
+            button.setProperty('kind', kind)
+            box.setDefaultButton(button)
+        choices[button] = text_label
+    box.exec()
+    return choices.get(box.clickedButton())
 
-    def open_folder(self):
-        folder = Path(self.path).parent if self.path else ROOT / 'transcripts'
-        folder.mkdir(exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
-
-class Pill(QWidget):
-    def __init__(self):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowTitle('Whistle')
-        self.setFixedSize(600, 64)
-        self.window = None
-        self.worker = None
-        self.language = 'en'
-        self.model_key = 'small_en'
-        self.device_name = 'cpu'
-        try:
-            settings = json.loads((ROOT / 'settings.json').read_text(encoding='utf-8'))
-            self.model_key = settings.get('model', 'small_en')
-            self.device_name = settings.get('device', 'cpu')
-            self.language = settings.get('language', 'en')
-            validate_choice(self.model_key, self.device_name, self.language)
-        except (OSError, ValueError, KeyError):
-            self.model_key, self.device_name, self.language = 'small_en', 'cpu', 'en'
-        self.gpu_ready = False
-        self.probe_job = None
-        self.started = None
-        self.last_audio = None
+class Whistle(QObject):
+    def __init__(self, application):
+        super().__init__()
+        self.application = application
+        self.preferences = Preferences()
+        self.job = None
+        self.job_directory = None
+        self.job_error = None
+        self.job_title = ''
+        self.queue = []
         self.closing = False
-        self.document = Document()
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
-        self.source = QPushButton('Choose window  ▾')
-        self.source.setFixedWidth(130)
-        self.source.clicked.connect(self.pick)
-        layout.addWidget(self.source)
-        self.model_button = QPushButton(BY_KEY[self.model_key].short + ' ▾')
-        self.model_button.setFixedWidth(115)
-        self.model_button.setToolTip('Choose model · quality and speed')
-        self.model_button.clicked.connect(self.pick_model)
-        layout.addWidget(self.model_button)
-        self.device = QComboBox()
-        self.device.addItem('CPU', 'cpu'); self.device.addItem('GPU', 'cuda')
-        self.device.setFixedWidth(72)
-        self.device.setStyleSheet('padding: 5px;')
-        self.device.setToolTip('CPU or NVIDIA CUDA GPU. Whistle and native Windows Phonon use CPU.')
-        self.device.setCurrentIndex(1 if self.device_name == 'cuda' else 0)
-        self.device.setEnabled(self.model_key != 'whistle' and not BY_KEY[self.model_key].cpu_only)
-        self.device.currentIndexChanged.connect(self.device_changed)
-        layout.addWidget(self.device)
-        self.info = QLabel('Ready')
-        self.info.setFixedWidth(82)
-        self.info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.info.setObjectName('muted')
-        layout.addWidget(self.info)
-        self.record = QPushButton('● Record')
-        self.record.setFixedWidth(80)
-        self.record.setObjectName('record')
-        self.record.clicked.connect(self.toggle)
-        layout.addWidget(self.record)
-        document = QPushButton('▤')
-        document.setToolTip('Show transcription document')
-        document.setFixedWidth(32)
-        document.clicked.connect(self.show_document)
-        layout.addWidget(document)
-        more = QPushButton('⋮')
-        more.setFixedWidth(22)
-        more.setStyleSheet('border-radius: 12px; padding: 4px;')
-        more.setToolTip('Menu')
-        more.clicked.connect(self.menu)
-        layout.addWidget(more)
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.center().x() - self.width() // 2, screen.bottom() - 110)
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.tick)
-        self.timer.start(500)
-        self.drag = None
+        self.gpu_state, self.gpu_detail = 'unknown', ''
+        self.probe_job = None
+        self.settings = None
+        self.last_finished = None
+        self.source = self._restore_source()
+        self.include_mic = self.preferences['include_mic']
+
+        self.apply_theme()
+        self.pill = Pill(self.preferences['pill_on_top'])
+        self.pill.source_clicked.connect(self.choose_source)
+        self.pill.model_clicked.connect(self.model_menu)
+        self.pill.record_clicked.connect(self.record)
+        self.pill.stop_clicked.connect(self.stop)
+        self.pill.pause_clicked.connect(self.pause)
+        self.pill.cancel_clicked.connect(self.cancel)
+        self.pill.library_clicked.connect(lambda: self.open_library())
+        self.pill.menu_requested.connect(self.more_menu)
+        self.pill.result_clicked.connect(lambda: self.open_library(self.last_finished))
+        self.pill.moved.connect(lambda point: self.preferences.set(pill_position=[point.x(), point.y()]))
+        self.library = Library()
+        self.library.setWindowIcon(application.windowIcon())
+        self.library.record_requested.connect(self.record)
+        self.library.stop_requested.connect(self.stop)
+        self.library.pause_requested.connect(self.pause)
+        self.library.cancel_requested.connect(self.cancel)
+        self.library.import_requested.connect(self.import_files)
+        self.library.retranscribe_requested.connect(self.retranscribe)
+        self.library.settings_requested.connect(lambda: self.open_settings())
+        self.tray = self._build_tray()
+        self.hotkey = Hotkey(self.toggle_recording)
+        application.installNativeEventFilter(self.hotkey)
+        self.apply_hotkey()
+        application.styleHints().colorSchemeChanged.connect(lambda *_: self.apply_theme())
+        self.ticker = QTimer(self)
+        self.ticker.timeout.connect(self.tick)
+        self.ticker.start(200)
+        self.refresh_pill()
+        self.pill.place(self.preferences['pill_position'])
+        self.pill.show()
         self.write_ui_state()
-        if self.device_name == 'cuda':
+        if self.preferences['device'] == 'cuda':
             QTimer.singleShot(0, self.check_gpu)
+        if not self.preferences['welcomed']:
+            QTimer.singleShot(300, self.welcome)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QColor('#3c4c5e'))
-        painter.setBrush(QColor('#1a2029'))
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 31, 31)
+    # --- Appearance ------------------------------------------------------------------
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.drag = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+    def apply_theme(self):
+        theme.set_appearance(self.preferences['appearance'])
+        self.application.setPalette(palette())
+        self.application.setStyleSheet(theme.stylesheet())
+        for window in (getattr(self, 'library', None), self.settings):
+            if window is not None:
+                theme.apply_chrome(window)
 
-    def mouseMoveEvent(self, event):
-        if self.drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self.drag)
+    def welcome(self):
+        Welcome().exec()
+        self.preferences.set(welcomed=True)
+        self.open_library()
 
-    def mouseReleaseEvent(self, event):
-        self.drag = None
+    # --- Sources and models ----------------------------------------------------------
 
-    def pick(self):
-        picker = Picker(self)
-        index = picker.language.findData(self.language)
-        picker.language.setCurrentIndex(max(0, index))
-        if picker.exec() == QDialog.DialogCode.Accepted:
-            self.window = picker.selected
-            self.language = picker.language.currentData()
-            title = self.window.title
-            self.source.setText(title[:14] + ('…' if len(title) > 14 else '') + ' ▾')
-            self.source.setToolTip(f'{title}\nAudio from {self.window.app} and its child processes')
-            self.save_settings()
+    def _restore_source(self):
+        kind = self.preferences['source_kind']
+        if kind == 'system':
+            return SYSTEM_AUDIO
+        if kind == 'mic':
+            return MICROPHONE
+        path = self.preferences['source_path']
+        return next((window for window in list_windows() if path and window.path == path), None)
 
-    def save_settings(self):
-        temporary = ROOT / 'settings.tmp'
-        temporary.write_text(json.dumps({'model': self.model_key, 'device': self.device_name, 'language': self.language}), encoding='utf-8')
-        os.replace(temporary, ROOT / 'settings.json')
+    def refresh_pill(self):
+        model = BY_KEY[self.preferences['model']]
+        device = 'GPU' if self.preferences['device'] == 'cuda' else 'CPU'
+        self.pill.set_model(f'{model.short} · {device}')
+        if self.source is None:
+            self.pill.set_source('Choose a Source', 'An app, system audio, or mic', 'waveform')
+            return
+        mic = self.include_mic and self.source.kind != 'mic'
+        subtitle = {'system': 'Everything on this PC', 'mic': 'Microphone only'}.get(self.source.kind, 'App audio')
+        if mic:
+            subtitle += ' + mic'
+        title = self.source.title if self.source.kind != 'window' else self.source.app
+        picture = app_pixmap(self.source, 20) if self.source.kind == 'window' and self.source.path else \
+            {'system': 'display', 'mic': 'mic'}.get(self.source.kind, 'window')
+        self.pill.set_source(title, subtitle if self.source.kind != 'window' else f'{subtitle} · {self.source.title}', picture)
 
-    def pick_model(self):
-        picker = ModelPicker(self.model_key, self)
-        if picker.exec() == QDialog.DialogCode.Accepted:
-            self.model_key = picker.selected
-            self.model_button.setText(BY_KEY[self.model_key].short + ' ▾')
-            cpu_only = self.model_key == 'whistle' or BY_KEY[self.model_key].cpu_only
-            if cpu_only:
-                self.device.setCurrentIndex(0)
-            self.device.setEnabled(not cpu_only)
-            if BY_KEY[self.model_key].english_only:
-                self.language = 'en'
-            self.save_settings()
+    def choose_source(self):
+        if self.busy():
+            return False
+        picker = SourcePicker(self.source, self.include_mic)
+        picker.setWindowIcon(self.application.windowIcon())
+        if picker.exec() != QDialog.DialogCode.Accepted:
+            return False
+        self.source, self.include_mic = picker.selected, picker.include_mic
+        self.preferences.set(source_kind=self.source.kind, include_mic=self.include_mic, source_path=self.source.path)
+        self.refresh_pill()
+        return True
 
-    def device_changed(self):
-        self.device_name = self.device.currentData()
-        self.save_settings()
-        if self.device_name == 'cuda':
+    def model_menu(self, position):
+        menu = theme.polish_menu(QMenu())
+        heading = menu.addAction('Model')
+        heading.setEnabled(False)
+        for model in MODELS:
+            installed = model_path(model.key) is not None
+            action = menu.addAction(model.name + ('' if installed else '  —  Download…'))
+            action.setCheckable(True)
+            action.setChecked(model.key == self.preferences['model'])
+            action.triggered.connect(lambda _=False, key=model.key, ready=installed:
+                                     self.set_preferences(model=key) if ready else self.open_settings('models'))
+        menu.addSeparator()
+        processor = theme.polish_menu(menu.addMenu('Processor'))
+        cpu_only = BY_KEY[self.preferences['model']].cpu_only
+        for device, name in (('cpu', 'CPU'), ('cuda', 'NVIDIA GPU')):
+            action = processor.addAction(name, lambda device=device: self.set_preferences(device=device))
+            action.setCheckable(True)
+            action.setChecked(self.preferences['device'] == device)
+            action.setEnabled(device == 'cpu' or not cpu_only)
+        language = theme.polish_menu(menu.addMenu('Language'))
+        for code, name in LANGUAGES:
+            action = language.addAction(name, lambda code=code: self.set_preferences(language=code))
+            action.setCheckable(True)
+            action.setChecked(self.preferences['language'] == code)
+            action.setEnabled(supports_language(self.preferences['model'], code))
+        menu.addSeparator()
+        menu.addAction('Model Settings…', lambda: self.open_settings('models'))
+        menu.exec(position)
+
+    def set_preferences(self, **values):
+        if self.busy() and {'model', 'device', 'language'} & values.keys():
+            return
+        previous = dict(self.preferences)
+        self.preferences.set(**values)
+        if values.get('appearance') and values['appearance'] != previous['appearance']:
+            self.apply_theme()
+        if 'hotkey' in values:
+            self.apply_hotkey()
+        if 'pill_on_top' in values and values['pill_on_top'] != previous['pill_on_top']:
+            self.pill.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values['pill_on_top'])
+            self.pill.show()
+        if self.preferences['device'] == 'cuda' and previous['device'] != 'cuda':
             self.check_gpu()
+        self.refresh_pill()
+        if self.settings:
+            self.settings.sync(self.gpu_state, self.gpu_detail)
+
+    def apply_hotkey(self):
+        if self.preferences['hotkey']:
+            registered = self.hotkey.register(int(self.library.winId()))
+            if not registered and sys.platform == 'win32':
+                logging.warning('Ctrl+Alt+R is already used by another app.')
         else:
-            self.info.setText('Ready')
+            self.hotkey.unregister()
+        self.pill.record_button.setToolTip('Record  (Ctrl+Alt+R)' if self.hotkey.hwnd else 'Record')
+
+    # --- GPU -------------------------------------------------------------------------
 
     def check_gpu(self):
         if self.probe_job and self.probe_job.isRunning():
             return
-        self.record.setEnabled(False)
-        self.info.setText('GPU check…')
+        self.gpu_state, self.gpu_detail = 'checking', ''
         self.probe_job = HelperJob(['probe'])
-        self.probe_job.event.connect(self.gpu_event)
-        self.probe_job.failed.connect(lambda message: self.device.setToolTip(message))
-        self.probe_job.finished.connect(self.gpu_checked)
+        self.probe_job.event.connect(self._gpu_event)
+        self.probe_job.failed.connect(lambda message: setattr(self, 'gpu_detail', message))
+        self.probe_job.finished.connect(self._gpu_done)
         self.probe_job.start()
+        if self.settings:
+            self.settings.sync(self.gpu_state, self.gpu_detail)
 
-    def gpu_event(self, event):
+    def _gpu_event(self, event):
         if event['kind'] == 'probe':
-            self.gpu_ready = True
-            self.device.setToolTip(f"NVIDIA CUDA: {event['name']} · {event['free_mb']} MB free VRAM")
+            self.gpu_state = 'ready'
+            self.gpu_detail = f"{event['name']} · {event['free_mb'] / 1024:.1f} GB free"
 
-    def gpu_checked(self):
-        if self.probe_job.error:
-            self.gpu_ready = False
-        self.record.setEnabled(True)
-        self.info.setText('Ready' if self.gpu_ready else 'GPU error')
+    def _gpu_done(self):
+        if self.probe_job.error or self.gpu_state != 'ready':
+            self.gpu_state = 'error'
+            self.gpu_detail = self.gpu_detail or 'No usable NVIDIA GPU was found.'
+        if self.settings:
+            self.settings.sync(self.gpu_state, self.gpu_detail)
 
-    def write_ui_state(self):
-        phase = self.worker.phase if self.worker and self.worker.isRunning() else 'idle'
-        (ROOT / 'ui-state.json').write_text(json.dumps({'pid': os.getpid(), 'phase': phase, 'model': self.model_key, 'device': self.device_name}), encoding='utf-8')
+    # --- Recording -------------------------------------------------------------------
 
-    def toggle(self):
-        if self.worker and self.worker.isRunning():
-            if self.worker.phase == 'transcribing':
-                self.info.setText('Cancelling…'); self.worker.cancel()
-            else:
-                self.info.setText('Saving…'); self.worker.stop()
-            self.record.setEnabled(False)
-            return
-        if not self.window or not window_exists(self.window):
-            self.pick()
-        if not self.window or not window_exists(self.window):
-            return
-        self.start_job()
+    def busy(self):
+        return self.job is not None and self.job.isRunning()
 
-    def start_job(self, source_audio=None, window=None):
+    def toggle_recording(self):
+        if self.busy() and self.job.phase == 'recording':
+            self.stop()
+        elif not self.busy():
+            self.record()
+
+    def ready_to_transcribe(self, model_key=None, device=None):
+        model_key = model_key or self.preferences['model']
+        model = BY_KEY[model_key]
+        device = 'cpu' if model.cpu_only else (device or self.preferences['device'])
+        if not model_path(model_key):
+            choice = alert(None, f'{model.name} isn’t downloaded yet',
+                           f'Download it once ({model.size}) and it stays on this PC.',
+                           (('Not Now', 'cancel'), ('Show Models', 'primary')))
+            if choice == 'Show Models':
+                self.open_settings('models')
+            return False
+        if device == 'cuda' and self.gpu_state != 'ready':
+            detail = 'Whistle is still checking your GPU.' if self.gpu_state == 'checking' else (self.gpu_detail or 'No usable NVIDIA GPU was found.')
+            choice = alert(None, 'NVIDIA GPU isn’t available', detail, (('Cancel', 'cancel'), ('Use CPU', 'primary')))
+            if choice != 'Use CPU':
+                return False
+            self.set_preferences(device='cpu')
         try:
-            validate_choice(self.model_key, self.device_name, self.language)
-            if not model_path(self.model_key):
-                self.pick_model()
-                if not model_path(self.model_key):
-                    return
-            if self.device_name == 'cuda' and not self.gpu_ready:
-                raise ValueError('NVIDIA CUDA is not ready. Check the GPU selector tooltip or choose CPU.')
+            validate_choice(model_key, self.preferences['device'] if not model.cpu_only else 'cpu', self.preferences['language'])
         except ValueError as exc:
-            self.error(str(exc)); return
-        self.worker = Recorder(window or self.window, self.language, model_key=self.model_key,
-                               device=self.device_name, source_audio=source_audio)
-        self.worker.status.connect(self.status_changed)
-        self.worker.transcript.connect(self.document.update_text)
-        self.worker.level.connect(self.audio_level)
-        self.worker.saved.connect(self.set_document)
-        self.worker.phase_changed.connect(self.phase_changed)
-        self.worker.progress.connect(self.show_progress)
-        self.worker.failed.connect(self.error)
-        self.worker.finished.connect(self.done)
-        self.source.setEnabled(False)
-        self.model_button.setEnabled(False); self.device.setEnabled(False)
-        self.record.setText('■ Stop')
-        self.record.setObjectName('stop')
-        self.record.setStyleSheet('background: #a94053; color: white;')
-        self.info.setText('Starting…')
-        self.worker.start()
+            alert(None, 'Choose another language or model', str(exc))
+            return False
+        return True
 
-    def transcribe_saved(self):
-        if self.worker and self.worker.isRunning():
+    def record(self):
+        if self.busy():
+            if self.job.phase == 'recording':
+                self.stop()
             return
-        filename, _ = QFileDialog.getOpenFileName(self, 'Transcribe saved audio', str(ROOT / 'transcripts'), 'WAV audio (*.wav)')
-        if filename:
-            title = Path(filename).stem
-            try:
-                metadata = json.loads((Path(filename).parent / 'session.json').read_text(encoding='utf-8'))
-                title = metadata.get('source', title)
-            except (OSError, ValueError):
-                pass
-            self.start_job(filename, Window(0, 0, title, 'saved audio'))
+        if self.source is None or not window_exists(self.source):
+            if self.source is not None and self.source.kind == 'window':
+                self.source = self._find_reopened(self.source)
+            if self.source is None or not window_exists(self.source):
+                if not self.choose_source():
+                    return
+        if not self.ready_to_transcribe():
+            return
+        self.start_job(self.source, include_mic=self.include_mic)
 
-    def phase_changed(self, phase):
-        self.started = None if phase != 'recording' else self.started
-        if phase == 'transcribing':
-            self.record.setText('Cancel'); self.record.setEnabled(True)
-            self.document.pending.setText('Transcribing saved audio…')
+    def _find_reopened(self, previous):
+        return next((window for window in list_windows() if window.path and window.path == previous.path), None)
+
+    def start_job(self, source, source_audio=None, model_key=None, title=None, include_mic=False, import_audio=False):
+        model_key = model_key or self.preferences['model']
+        device = 'cpu' if BY_KEY[model_key].cpu_only else self.preferences['device']
+        language = self.preferences['language']
+        if BY_KEY[model_key].english_only:
+            language = 'en'
+        self.job = Recorder(source, language, self.library.root, model_key=model_key, device=device, source_audio=source_audio,
+                            include_mic=include_mic, vocabulary=self.preferences['vocabulary'], title=title, import_audio=import_audio)
+        self.job_error, self.job_directory, self.job_title = None, None, title or source.title
+        self.job_model = BY_KEY[model_key]
+        self.job_percent = None
+        self.job.saved.connect(self._saved)
+        self.job.phase_changed.connect(self._phase)
+        self.job.level.connect(self.pill.push_level)
+        self.job.updated.connect(self.library.set_live_paragraphs)
+        self.job.progress.connect(self._progress)
+        self.job.status.connect(self._status)
+        self.job.failed.connect(self._failed)
+        self.job.finished.connect(self._done)
+        if source_audio:
+            self.pill.show_working('Preparing', self.job_title)
+        self.job.start()
+        self._update_tray()
+
+    def _saved(self, path):
+        self.job_directory = str(Path(path).parent)
+        self.library.set_live(self.job_directory, self.job.phase if self.job else 'idle')
+
+    def _phase(self, phase):
+        if phase == 'recording':
+            source = self.job.window
+            self.pill.show_recording(source.app if source.kind == 'window' else source.title)
+        elif phase == 'preparing':
+            self.pill.show_working('Preparing Audio', self.job_title)
+        elif phase == 'transcribing':
+            self.job_percent = None
+            self.pill.show_working('Transcribing', f'{self.job_model.short} · Starting…')
+        if phase != 'idle' and self.job_directory:
+            self.library.set_live(self.job_directory, phase)
         self.write_ui_state()
+        self._update_tray()
 
-    def show_progress(self, percent):
-        self.info.setText(f'{percent}% done')
-        self.document.pending.setText(f'Transcribing · {percent}%')
+    def _progress(self, percent):
+        self.job_percent = percent
+        self.pill.show_working(self.pill.working_title.text(), f'{self.job_model.short} · {percent}%', percent)
+        if self.job_directory:
+            self.library.set_live(self.job_directory, self.job.phase, percent)
 
-    def set_document(self, path):
-        self.document.path = path
-        self.document.update_text(Path(path).read_text(encoding='utf-8'), '')
+    def _status(self, text):
+        if self.job and self.job.phase in ('preparing', 'transcribing') and self.job_percent is None:
+            self.pill.show_working(self.pill.working_title.text(), f'{self.job_model.short} · {text}')
+            if self.job_directory:
+                self.library.set_live(self.job_directory, self.job.phase, None, text)
 
-    def status_changed(self, status):
-        if status == 'Recording':
-            self.started = time.monotonic()
-            self.last_audio = None
-        self.info.setText('Working…' if len(status) > 14 else status)
-        self.info.setToolTip(status)
-        if status == 'Recording':
-            self.document.pending.setText('Recording audio. Press Stop to create your transcript.')
-
-    def audio_level(self, level):
-        if level > 0.0004:
-            self.last_audio = time.monotonic()
+    def _failed(self, message):
+        logging.error(message)
+        self.job_error = message
 
     def tick(self):
-        if self.worker and self.worker.isRunning() and self.started and not self.worker.stopping.is_set():
-            self.info.setText('● ' + timestamp(time.monotonic() - self.started))
-            active = self.last_audio is not None and time.monotonic() - self.last_audio < 2
-            self.info.setStyleSheet('color: #88e4cb;' if active else 'color: #a7b3c2;')
-            self.info.setToolTip('Audio detected' if active else 'Waiting for audio from the selected app')
-            if not window_exists(self.window):
-                self.worker.stop()
-                self.info.setText('Saving…')
+        if not self.busy() or self.job.phase != 'recording':
+            return
+        seconds = self.job.recorded_seconds
+        self.pill.set_elapsed(seconds)
+        self.library.set_live_elapsed(seconds, self.job.paused.is_set())
+        if self.job.window.kind == 'window' and not self.job.stopping.is_set() and not window_exists(self.job.window):
+            self.stop()  # The source app closed: finish and transcribe what was captured.
 
-    def done(self):
-        self.started = None
-        self.source.setEnabled(True)
-        self.model_button.setEnabled(True)
-        self.device.setEnabled(self.model_key != 'whistle' and not BY_KEY[self.model_key].cpu_only)
-        self.record.setEnabled(True)
-        self.record.setText('● Record')
-        self.record.setObjectName('record')
-        self.record.setStyleSheet('background: #88e4cb; color: #101e1c;')
-        cancelled = self.worker.cancelled.is_set()
-        audio_saved = bool(self.worker.source_audio or (self.worker.document and (self.worker.document.directory / 'Audio.wav').is_file()))
-        if cancelled:
-            message = 'Cancelled. Audio and any partial text are saved.' if audio_saved else 'Cancelled before recording started.'
-        elif self.worker.error:
-            message = 'Transcription failed. Audio is saved; retry from the menu.' if audio_saved else 'Recording could not start. See the error for details.'
-        else:
-            message = 'Transcript saved locally.'
-        self.document.pending.setText(message)
+    def stop(self):
+        if self.busy() and self.job.phase == 'recording':
+            self.job.stop()
+            self.pill.set_finishing()
+
+    def pause(self):
+        if self.busy() and self.job.phase == 'recording':
+            paused = not self.job.paused.is_set()
+            self.job.pause(paused)
+            self.pill.set_paused(paused)
+            self.library.set_live_elapsed(self.job.recorded_seconds, paused)
+
+    def cancel(self):
+        if self.busy():
+            self.job.cancel()
+            self.pill.show_working('Cancelling…', 'Audio is kept')
+
+    def _done(self):
+        job, directory = self.job, self.job_directory
+        self.last_finished = directory
+        self.library.set_live(None, 'idle')
+        self.library.refresh(select=directory if self.library.isVisible() else None)
         self.write_ui_state()
+        self._update_tray()
         if self.closing:
             QApplication.quit()
-        elif not cancelled and not self.worker.error:
-            self.show_document()
-
-    def error(self, message):
-        logging.error(message)
-        QMessageBox.warning(self, 'Whistle', message)
-
-    def show_document(self):
-        self.document.show()
-        self.document.raise_()
-        self.document.activateWindow()
-
-    def menu(self):
-        menu = QMenu(self)
-        action = menu.addAction('Transcribe saved audio…', self.transcribe_saved)
-        action.setEnabled(not (self.worker and self.worker.isRunning()))
-        action = menu.addAction('Choose model…', self.pick_model)
-        action.setEnabled(not (self.worker and self.worker.isRunning()))
-        menu.addAction('Open transcripts folder', self.document.open_folder)
-        menu.addAction('Quit Whistle', self.close)
-        menu.exec(self.mapToGlobal(self.rect().bottomRight()))
-
-    def closeEvent(self, event):
-        if self.worker and self.worker.isRunning():
-            self.closing = True
-            self.worker.cancel()
-            self.info.setText('Saving…')
-            event.ignore()
+            return
+        audio_saved = bool(job.source_audio or (job.document and (job.document.directory / 'Audio.wav').is_file()))
+        if job.cancelled.is_set():
+            self.pill.show_result(False, 'Cancelled', 'Audio and any partial text are saved' if audio_saved else 'Nothing was recorded')
+        elif job.error:
+            title = 'Couldn’t Transcribe' if audio_saved else 'Couldn’t Record'
+            self.pill.show_result(False, title, job.error.split('\n')[0], timeout=14000)
+            if not directory:
+                alert(None, title, job.error)
         else:
-            if self.probe_job and self.probe_job.isRunning():
-                self.probe_job.cancel()
-                self.probe_job.wait(3000)
-            self.document.close()
-            event.accept()
-            QApplication.quit()
+            self.pill.show_result(True, 'Transcript Ready', self.job_title)
+            if self.preferences['notify_when_done'] and not self.library.isActiveWindow() and self.tray.isVisible():
+                self.tray.showMessage('Transcript Ready', self.job_title, theme.icon('waveform', '#0A84FF', 32), 5000)
+            if self.preferences['open_when_done'] and not self.queue:
+                self.open_library(directory)
+        if self.queue:
+            QTimer.singleShot(400, self._next_import)
+
+    # --- Imports ---------------------------------------------------------------------
+
+    def import_files(self, paths):
+        if not self.ready_to_transcribe():
+            return
+        self.queue.extend(paths)
+        if not self.busy():
+            self._next_import()
+
+    def _next_import(self):
+        if not self.queue or self.busy():
+            return
+        path = Path(self.queue.pop(0))
+        source = Window(0, 0, path.stem, 'Imported file', kind='file')
+        self.start_job(source, source_audio=path, title=path.stem, import_audio=True)
+
+    def retranscribe(self, session, model_key=None):
+        if self.busy():
+            alert(self.library, 'Whistle is busy', 'Wait for the current recording or transcription to finish.')
+            return
+        model_key = model_key or self.preferences['model']
+        if session.audio_path is None or not self.ready_to_transcribe(model_key):
+            return
+        meta = session.metadata
+        source = Window(0, 0, meta.get('source') or session.title, meta.get('app') or 'saved audio',
+                        kind=meta.get('source_kind', 'file'))
+        self.start_job(source, source_audio=session.audio_path, model_key=model_key, title=session.title)
+
+    # --- Windows and menus -----------------------------------------------------------
+
+    def open_library(self, directory=None):
+        if directory:
+            self.library.select(directory)
+        else:
+            self.library.refresh()
+        if self.library.isMinimized():
+            self.library.showNormal()
+        self.library.show()
+        self.library.raise_()
+        self.library.activateWindow()
+
+    def open_settings(self, page='general'):
+        if self.settings is None:
+            self.settings = SettingsWindow(self.preferences)
+            self.settings.setWindowIcon(self.application.windowIcon())
+            self.settings.changed.connect(lambda values: self.set_preferences(**values))
+        self.settings.sync(self.gpu_state, self.gpu_detail)
+        self.settings.show_page(page)
+        self.settings.show()
+        self.settings.raise_()
+        self.settings.activateWindow()
+
+    def more_menu(self, position):
+        menu = theme.polish_menu(QMenu())
+        menu.addAction(theme.icon('library', theme.tokens()['text']), 'Open Library', lambda: self.open_library())
+        action = menu.addAction(theme.icon('import', theme.tokens()['text']), 'Import Audio or Video…', self.library.choose_import)
+        action.setEnabled(not self.busy())
+        menu.addAction(theme.icon('sliders', theme.tokens()['text']), 'Settings…', lambda: self.open_settings())
+        menu.addSeparator()
+        menu.addAction('Hide Pill', self.pill.hide)
+        menu.addAction('Quit Whistle', self.quit)
+        menu.exec(position)
+
+    def _build_tray(self):
+        tray = QSystemTrayIcon(self.application.windowIcon(), self)
+        tray.setToolTip('Whistle')
+        menu = theme.polish_menu(QMenu())
+        self.tray_record = menu.addAction('Start Recording', self.toggle_recording)
+        menu.addAction('Show Pill', lambda: (self.pill.show(), self.pill.raise_()))
+        menu.addAction('Open Library', lambda: self.open_library())
+        menu.addAction('Settings…', lambda: self.open_settings())
+        menu.addSeparator()
+        menu.addAction('Quit Whistle', self.quit)
+        tray.setContextMenu(menu)
+        self.tray_menu = menu
+        tray.activated.connect(lambda reason: self.open_library() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+        tray.messageClicked.connect(lambda: self.open_library(self.last_finished))
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            tray.show()
+        return tray
+
+    def _update_tray(self):
+        recording = self.busy() and self.job.phase == 'recording'
+        self.tray_record.setText('Stop Recording' if recording else 'Start Recording')
+        self.tray_record.setEnabled(recording or not self.busy())
+        self.tray.setToolTip('Whistle — Recording' if recording else ('Whistle — Transcribing' if self.busy() else 'Whistle'))
+
+    def write_ui_state(self):
+        phase = self.job.phase if self.busy() else 'idle'
+        try:
+            (ROOT / 'ui-state.json').write_text(json.dumps({'pid': os.getpid(), 'phase': phase, 'model': self.preferences['model'],
+                                                            'device': self.preferences['device']}), encoding='utf-8')
+        except OSError:
+            pass
+
+    def quit(self):
+        if self.busy():
+            doing = 'recording' if self.job.phase == 'recording' else 'transcribing'
+            choice = alert(None, f'Whistle is {doing}', 'Quit anyway? Audio captured so far is saved, and you can transcribe it later from the library.',
+                           (('Keep Going', 'cancel'), ('Quit', 'destructive')))
+            if choice != 'Quit':
+                return
+            self.closing = True
+            self.job.cancel()
+            return
+        if self.settings:
+            self.settings.models.shutdown()
+        if self.probe_job and self.probe_job.isRunning():
+            self.probe_job.cancel()
+            self.probe_job.wait(3000)
+        self.hotkey.unregister()
+        self.library.close()
+        self.tray.hide()
+        QApplication.quit()
+
+def handoff():
+    """If Whistle is already running, ask it to come forward."""
+    socket = QLocalSocket()
+    socket.connectToServer(SERVER)
+    if socket.waitForConnected(300):
+        socket.write(b'show')
+        socket.waitForBytesWritten(300)
+        socket.disconnectFromServer()
+        return True
+    return False
 
 def main():
     logging.basicConfig(filename=ROOT / 'whistle.log', level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Whistle.Transcribe')
+        except (AttributeError, OSError):
+            pass
     application = QApplication(sys.argv)
-    application.setStyleSheet(STYLE)
+    application.setApplicationName('Whistle')
+    application.setApplicationDisplayName('Whistle')
+    application.setStyle('Fusion')
+    application.setFont(theme.font(13))
     application.setQuitOnLastWindowClosed(False)
     lock = QLockFile(str(ROOT / 'whistle.lock'))
     if not lock.tryLock(100):
-        QMessageBox.information(None, 'Whistle', 'Whistle is already running. Look for the pill near the bottom of your screen.')
+        if not handoff():
+            QMessageBox.information(None, 'Whistle', 'Whistle is already running. Look for the pill near the bottom of your screen.')
         return 0
-    icon = QPixmap(64, 64)
-    icon.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(icon)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor('#88e4cb'))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(4, 15, 56, 34, 17, 17)
-    painter.setPen(QColor('#172722'))
-    font = painter.font(); font.setPixelSize(23); font.setBold(True); painter.setFont(font)
-    painter.drawText(icon.rect(), Qt.AlignmentFlag.AlignCenter, 'w')
-    painter.end()
-    icon.save(str(ROOT / 'bin' / 'whistle.ico'))
-    application.setWindowIcon(QIcon(icon))
-    pill = Pill()
-    pill.show()
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        icon.addPixmap(theme.app_icon(size))
+    (ROOT / 'bin').mkdir(exist_ok=True)
+    theme.app_icon(256).save(str(ROOT / 'bin' / 'whistle.ico'))
+    application.setWindowIcon(icon)
+    controller = Whistle(application)
+    server = QLocalServer()
+    QLocalServer.removeServer(SERVER)
+    server.listen(SERVER)
+    server.newConnection.connect(lambda: (server.nextPendingConnection(), controller.pill.show(), controller.open_library()))
+    application.controller, application.server = controller, server
     return application.exec()
 
 if __name__ == '__main__':
