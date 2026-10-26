@@ -80,7 +80,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
-`build-capture.cmd` finds Visual Studio with `vswhere`, so you don't need to edit any paths. **Rebuild the capture helper after updating**: the new source and mixing modes need it, and an outdated helper produces a clear error. To launch, double-click **Launch Whistle.vbs** or **Launch Whistle.cmd**, or run `create-shortcut.ps1` to add a desktop shortcut. Launching a second time brings the running copy forward.
+`build-capture.cmd` finds Visual Studio with `vswhere`, so you don't need to edit any paths. **Rebuild the capture helper after updating**: the new source and mixing modes need it, and an outdated helper produces a clear error. To launch, double-click **Launch Whistle.vbs** or **Launch Whistle.cmd**, or run `create-shortcut.ps1` to add desktop and Start-menu shortcuts (search **Whistle** in Windows). Both shortcuts point to this checkout. Launching a second time brings the running copy forward.
 
 Whisper on CUDA needs an NVIDIA driver, CUDA 12 cuBLAS, and cuDNN 9 DLLs. The isolated worker searches installed CUDA toolkits and PyTorch runtime DLL directories. Settings shows the GPU name and free VRAM, or what is missing. Before loading a model, inference checks free dedicated VRAM against a conservative reserve. GPU workers exit after each transcription to release memory. Nemotron uses official NeMo-Speech.cpp 0.2.0 Windows CPU/CUDA binaries, verified against the release SHA-256 checksums.
 
