@@ -53,11 +53,11 @@ shoot(pill, 'pill-recording')
 controller.pause()
 assert pill.dot.paused and controller.job.paused.is_set()
 wait(lambda: shelf.live.title.text() == 'Paused')
+time.sleep(0.2)  # A block already being mixed when Pause was pressed may still land.
 paused_at = controller.job.recorded_seconds
-wait(lambda: time.sleep(0.05) or controller.job.recorded_seconds == paused_at, 2)
-time.sleep(0.5)
+time.sleep(0.6)
 controller.tick()
-assert abs(controller.job.recorded_seconds - paused_at) < 0.1, 'Paused time must not count'
+assert controller.job.recorded_seconds == paused_at, 'Paused time must not count'
 controller.pause()
 wait(lambda: controller.job.recorded_seconds > paused_at + 0.4)
 controller.toggle_recording()  # the global shortcut path
