@@ -1,6 +1,6 @@
 # Windows hardware validation
 
-Reviewed PR #1 at `2e3c39fe7472d7f5824957421ef49e68eeaee9b0`, then added two regression fixes to the same PR.
+Reviewed PR #1 at `2e3c39fe7472d7f5824957421ef49e68eeaee9b0`, then added three regression fixes to the same PR.
 
 Validation ran on October 26, 2026 in an isolated Windows worktree with its own Python environment and newly compiled capture helper. Original recordings, transcripts, model weights and the installed app checkout were preserved. Existing model caches were reused; generated test results and microphone samples stay local and are excluded from Git.
 
@@ -9,7 +9,7 @@ Validation ran on October 26, 2026 in an isolated Windows worktree with its own 
 | Check | Evidence |
 |---|---|
 | MSVC build | Updated `native/capture.cpp` compiled using `build-capture.cmd` |
-| Offline suite | All 20 checks passed after adding the two regression cases; these use stand-ins |
+| Offline suite | All 21 checks passed, including the new regression cases; capture/model flow checks use stand-ins |
 | `tests/integration.py` | Actual process-loopback speech playback, captured WAV, real Whistle final pass and saved text passed |
 | `tests/idle.py` | Silent app capture and clean completion passed |
 | `tests/isolation.py` | Unrelated app speech remained excluded at the Windows PCM mixer dither floor |
@@ -20,6 +20,7 @@ Validation ran on October 26, 2026 in an isolated Windows worktree with its own 
 | Microphone | Actual default microphone started, emitted 44.1 kHz stereo PCM16 for approximately 1.5 seconds, and stopped cleanly |
 | System + microphone | Real dual-source recorder passed pause/resume, stop and a final model pass; approximately 1.46 seconds were saved from 2.1 seconds with a 0.65-second pause |
 | Global shortcut | Computer-use input sent Ctrl+Alt+R from a separate application process; actual app state changed to recording, then the second chord produced a completed 6.51-second library session |
+| Compact state layout | Recording and paused panels passed 16 light/dark size/state cases; native Windows rendering at 471×322 was visually inspected with the complete explanatory text visible |
 
 The additional native endpoint checks are in `tests/windows_sources.py`. Start its `--sender` mode in an **independent process tree**, then run the script normally. A child playback process of the recorder is intentionally excluded from system capture, so both commands must not be parent/child processes. The sender plays a modest test tone and stops when the receiver finishes or its safety timeout expires.
 
@@ -29,6 +30,7 @@ The global-shortcut test used the actual native event filter, not a direct contr
 
 1. **Unsaved edits could be lost when a library search hid every session.** The no-results branch replaced the current session without the selection callback that normally saves edits. Filtering now finishes/saves editing before changing the selection. The UI regression test covers hiding and restoring the edited session.
 2. **PCM16 WAV imports depended on the external source file.** Compressed imports were library-owned, but valid WAV imports took the re-transcription fast path and referenced the external file. Imports now explicitly create library-owned audio even for WAV; re-transcriptions still reuse the existing library recording. The UI test checks audio ownership and the unchanged source hash.
+3. **Recording/paused explanatory text was clipped.** The wrapped label could shrink to a single line and surrounding default spacing consumed the compact panel's height. The panel now reserves the actual wrapped height, fits the available width, uses explicit spacing, and scrolls at very small sizes. `tests/layout_offline.py` covers both states and themes at four sizes.
 
 ## Limits
 

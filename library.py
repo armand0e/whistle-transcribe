@@ -9,7 +9,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QKeySequence, QPaint
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-                               QMessageBox, QPushButton, QSlider, QSplitter, QStackedWidget, QStyle,
+                               QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QStyle,
                                QStyledItemDelegate, QTextBrowser, QTextEdit, QVBoxLayout, QWidget)
 
 import theme
@@ -429,7 +429,20 @@ class Placeholder(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.content = QWidget()
+        self.scroll.setWidget(self.content)
+        self.content.setAutoFillBackground(False)
+        outer.addWidget(self.scroll)
+        layout = QVBoxLayout(self.content)
+        layout.setContentsMargins(20, 12, 20, 12)
+        layout.setSpacing(0)
         layout.addStretch(3)
         self.picture = QLabel()
         self.picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -438,12 +451,14 @@ class Placeholder(QWidget):
         self.title = label('', size=22, weight=QFont.Weight.DemiBold, display=True)
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.title)
+        layout.addSpacing(6)
         self.big = label('', size=40, weight=QFont.Weight.Light, display=True, tabular=True)
         self.big.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.big)
+        layout.addSpacing(6)
         self.body = label('', 'secondary', wrap=True)
         self.body.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.body.setFixedWidth(420)
+        self.body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         layout.addWidget(self.body, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addSpacing(18)
         self.buttons = QHBoxLayout()
@@ -456,6 +471,21 @@ class Placeholder(QWidget):
         self.buttons.addStretch()
         layout.addLayout(self.buttons)
         layout.addStretch(4)
+        self.scroll.viewport().installEventFilter(self)
+
+    def fit_body(self):
+        # Word-wrapped QLabel's default minimum is only one line. Reserve the
+        # actual wrapped height so the layout cannot crop its last line.
+        width = min(420, max(1, self.scroll.viewport().width() - 40))
+        self.body.setFixedWidth(width)
+        self.body.ensurePolished()
+        self.body.setMinimumHeight(max(0, self.body.heightForWidth(width)))
+        self.content.updateGeometry()
+
+    def eventFilter(self, watched, event):
+        if watched is self.scroll.viewport() and event.type() == QEvent.Type.Resize:
+            self.fit_body()
+        return super().eventFilter(watched, event)
 
     def show_state(self, picture, title, body, big='', primary=None, secondary=None):
         self.picture.setPixmap(picture)
@@ -463,6 +493,7 @@ class Placeholder(QWidget):
         self.big.setText(big)
         self.big.setVisible(bool(big))
         self.body.setText(body)
+        self.fit_body()
         for button, text in ((self.primary, primary), (self.secondary, secondary)):
             button.setVisible(bool(text))
             button.setText(text or '')
