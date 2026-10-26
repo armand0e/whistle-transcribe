@@ -115,7 +115,7 @@ class Recorder(QThread):
     progress = Signal(int)
 
     def __init__(self, window, language=None, output=None, model_key='small_en', device='cpu', source_audio=None,
-                 include_mic=False, vocabulary='', title=None):
+                 include_mic=False, vocabulary='', title=None, import_audio=False):
         super().__init__()
         self.window, self.language = window, language
         self.model_key, self.device = model_key, device
@@ -124,6 +124,7 @@ class Recorder(QThread):
         self.title = title
         self.output = output or ROOT / 'transcripts'
         self.source_audio = Path(source_audio).resolve() if source_audio else None
+        self.import_audio = import_audio
         self.stopping = threading.Event()
         self.cancelled = threading.Event()
         self.paused = threading.Event()
@@ -335,7 +336,7 @@ class Recorder(QThread):
                 audio_path = self.source_audio
                 self.document.metadata['source_audio'] = str(audio_path)
                 self.document.metadata['capture_scope'] = 'saved audio'
-                if not is_pcm16_wav(audio_path):
+                if self.import_audio or not is_pcm16_wav(audio_path):
                     audio_path = self.document.directory / 'Audio.wav'
                     self.convert(self.source_audio, audio_path)
             else:

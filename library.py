@@ -760,6 +760,10 @@ class Library(QMainWindow):
         self.filter(select=current)
 
     def filter(self, select=None):
+        # Filtering may remove every row without a selection-change signal.
+        # Save against the current session before replacing that selection.
+        if self.editing:
+            self._finish_edit(save=True)
         select = select or (self.session.directory if self.session else None)
         query = self.search.text()
         self.list.blockSignals(True)

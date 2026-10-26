@@ -340,14 +340,14 @@ class Whistle(QObject):
     def _find_reopened(self, previous):
         return next((window for window in list_windows() if window.path and window.path == previous.path), None)
 
-    def start_job(self, source, source_audio=None, model_key=None, title=None, include_mic=False):
+    def start_job(self, source, source_audio=None, model_key=None, title=None, include_mic=False, import_audio=False):
         model_key = model_key or self.preferences['model']
         device = 'cpu' if BY_KEY[model_key].cpu_only else self.preferences['device']
         language = self.preferences['language']
         if BY_KEY[model_key].english_only:
             language = 'en'
         self.job = Recorder(source, language, self.library.root, model_key=model_key, device=device, source_audio=source_audio,
-                            include_mic=include_mic, vocabulary=self.preferences['vocabulary'], title=title)
+                            include_mic=include_mic, vocabulary=self.preferences['vocabulary'], title=title, import_audio=import_audio)
         self.job_error, self.job_directory, self.job_title = None, None, title or source.title
         self.job_model = BY_KEY[model_key]
         self.job_percent = None
@@ -465,7 +465,7 @@ class Whistle(QObject):
             return
         path = Path(self.queue.pop(0))
         source = Window(0, 0, path.stem, 'Imported file', kind='file')
-        self.start_job(source, source_audio=path, title=path.stem)
+        self.start_job(source, source_audio=path, title=path.stem, import_audio=True)
 
     def retranscribe(self, session, model_key=None):
         if self.busy():

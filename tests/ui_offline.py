@@ -90,6 +90,20 @@ shelf.copy_text()
 assert QApplication.clipboard().text().endswith('A sentence I added myself.')
 print('PASS: find, rename, inline edit, and copy', flush=True)
 
+shelf.toggle_edit()
+cursor = shelf.editor.textCursor()
+cursor.movePosition(cursor.MoveOperation.End)
+cursor.insertText(' Saved even when search hides this transcript.')
+shelf.editor.document().setModified(True)
+shelf.search.setText('query-that-matches-no-transcript')
+wait(lambda: shelf.session is None)
+assert not shelf.editing
+assert 'Saved even when search hides this transcript.' in (session.directory / 'edits.json').read_text(encoding='utf-8')
+shelf.search.clear()
+wait(lambda: shelf.session is not None)
+assert 'Saved even when search hides this transcript.' in shelf.session.text()
+print('PASS: filtering to zero results preserves in-progress edits', flush=True)
+
 controller.retranscribe(session, 'whistle')
 wait(lambda: not controller.busy() and pill.state == 'result', 60)
 rerun = shelf.session
@@ -104,6 +118,21 @@ titles = [item.title for item in library.list_sessions(shelf.root)]
 assert 'interview' in titles and 'memo' in titles, titles
 assert len(titles) == 4
 print('PASS: queued imports of compressed media', flush=True)
+
+# A WAV imported from outside the library must be owned just like a FLAC.
+# Re-transcribing an existing session must still reuse that owned recording.
+import shutil
+import hashlib
+external_wav = folder / 'external-recording.wav'
+shutil.copyfile(session.audio_path, external_wav)
+original_hash = hashlib.sha256(external_wav.read_bytes()).hexdigest()
+controller.import_files([str(external_wav)])
+wait(lambda: not controller.queue and not controller.busy() and pill.state == 'result', 60)
+imported = shelf.session
+assert imported.audio_path == imported.directory / 'Audio.wav'
+assert imported.audio_path != external_wav and imported.audio_path.is_file()
+assert hashlib.sha256(external_wav.read_bytes()).hexdigest() == original_hash
+print('PASS: PCM16 WAV imports own their audio without changing the source', flush=True)
 
 controller.set_preferences(model='whistle', device='cuda')
 assert controller.preferences['device'] == 'cpu' and pill.chip.text() == 'Whistle · CPU'
