@@ -4,5 +4,6 @@ PySide6==6.12.0
 soxr==1.1.0
 faster-whisper==1.1.1
 ctranslate2==4.8.3
+av==19.0.2
 requests==2.34.2
 fermion-research==0.2.11

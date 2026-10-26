@@ -1,14 +1,38 @@
-# Window transcription pill
+# Whistle
 
-A small always-on-top Windows app. **Choose a window → choose a model and CPU/GPU → Record → Stop.** It records audio first, then creates a timestamped transcript with your selected model. Transcription does not need to keep up during recording.
+**Record anything you hear on your PC and get a searchable, playable transcript. Everything runs locally.**
 
-Double-click **Launch Whistle.vbs**, **Launch Whistle.cmd**, or the **Whistle** desktop shortcut. Click the model name to compare options and download models. The device selector offers **CPU** and **GPU (NVIDIA CUDA)** for supported models. Preferences are remembered. Small.en on CPU is the initial default.
+Whistle has two parts. The **pill** is a small capsule that floats above your windows; it starts and stops recordings. The **library** is where every transcript lives: you can search it, play it back, edit it, and export it.
 
-The **▤** button opens the document; it also opens automatically when transcription finishes. **Cancel** during transcription stops the worker while preserving captured audio and partial text. Quitting cancels safely. Closing the source window finishes recording and starts transcription. Drag the pill by its border or timer.
+![The pill: idle, recording, transcribing, and done](docs/screenshots/pill.png)
 
-Use **⋮ → Transcribe saved audio…** to run another model on an existing WAV. Each attempt creates a new transcript folder and references the original audio. It does not replace the earlier transcript or duplicate the recording.
+![The library](docs/screenshots/library-light.png)
+
+## What it does
+
+- **Record any source.** Choose one app (Zoom, Teams, a browser, a video player), **all system audio**, or **your microphone**. Turn on *Include my microphone* to mix your own voice into a call recording.
+- **Record first, transcribe after.** Audio is saved to disk before any model runs, so a slow model never drops audio. You can pause and resume. A live waveform shows when the source is actually playing, and the pill says *Waiting for audio…* when it isn't. If the app you're recording closes, Whistle stops and transcribes what it captured.
+- **Shortcut from anywhere.** **Ctrl+Alt+R** starts and stops recording. The tray icon offers the same controls.
+- **Search the library.** Transcripts are grouped by date (Today, Yesterday, Previous 7 Days…) and search covers titles, apps, models and full text. **Ctrl+F** finds and highlights matches inside a transcript.
+- **Click a timestamp to listen.** The player has ±15 s skips and 0.75×–2× speed, and the paragraph being spoken is highlighted as it plays.
+- **Edit inline.** Fix names and typos, then press **Done**. Edits are stored next to the recognizer output, which is never overwritten. Click the title to rename a transcript.
+- **Export or copy.** Formats are plain text, Markdown, SRT and WebVTT subtitles (timed per word where available), and JSON.
+- **Import files.** Drag audio or video onto the library, or use **Import**. MP3, M4A, FLAC, OGG, Opus, WebM, MP4, MOV, MKV and WAV all work.
+- **Transcribe again with another model.** The new transcript reuses the same recording instead of copying it.
+- **Add your vocabulary.** List names, jargon and acronyms in Settings › Vocabulary, and Whisper and Whistle models are nudged toward those spellings.
+- **Light and dark.** The app follows Windows' theme automatically, matches the Windows 11 title bar, and uses its own vector icons and native-feeling controls.
+
+| Find in transcript | Dark appearance |
+|---|---|
+| ![Find](docs/screenshots/find.png) | ![Dark](docs/screenshots/library-dark.png) |
+
+| Choose a source | Models |
+|---|---|
+| ![Sources](docs/screenshots/sources.png) | ![Models](docs/screenshots/models.png) |
 
 ## Models and devices
+
+Choose a model in **Settings › Models**, or switch quickly from the model chip on the pill. Models download once, on demand, and cancelled downloads resume.
 
 | Model | Download | Device | Guidance |
 |---|---:|---|---|
@@ -16,34 +40,37 @@ Use **⋮ → Transcribe saved audio…** to run another model on an existing WA
 | Whisper Small.en | 484 MB | CPU / CUDA | Balanced English default; tested on lecture recordings |
 | Phonon-2 | 164 MB compressed | CPU | Fast CPU candidate; lecture tested; acronym errors remain |
 | Nemotron 3.5 ASR 0.6B | 742 MB Q8_0 + runtime | CPU / CUDA | Fast native NVIDIA runtime; lecture tested |
-| Whisper Medium.en | 1.53 GB | CPU / CUDA | More English capacity; download on demand; unbenchmarked here |
-| Whisper Large-v3 | 3.09 GB | CPU / CUDA | Largest Whisper option, multilingual; download on demand; unbenchmarked here |
+| Whisper Medium.en | 1.53 GB | CPU / CUDA | More English capacity; unbenchmarked here |
+| Whisper Large-v3 | 3.09 GB | CPU / CUDA | Largest Whisper option, multilingual (incl. Japanese, Chinese, Korean, Portuguese); unbenchmarked here |
 
-Quality/speed labels are guidance rather than verified accuracy rankings. The picker also shows local timings from one 56.14-second biology clip, including worker startup and model loading. Small.en was faster on CPU in this test; Nemotron was faster on CUDA. There is no automatic GPU-to-CPU fallback.
+The quality and speed labels are guidance, not verified accuracy rankings. The model cards show local timings from one 56.14-second biology clip, which include worker startup and model loading. In that test Small.en was faster on CPU and Nemotron was faster on CUDA. There is no automatic GPU-to-CPU fallback: if the GPU isn't ready, Whistle asks before switching to the CPU.
 
-Native Windows Phonon uses its official CPU engine. Its published CUDA container is not integrated or claimed as tested here. Whistle is CPU-only. AMD/Vulkan/DirectML and Apple MLX are not offered.
-
-Models are downloaded once. Larger models have a download button in the picker. Cancelled Hub downloads can be resumed. Audio never goes to an inference service; package telemetry is disabled.
+Native Windows Phonon uses its official CPU engine; its published CUDA container is not integrated. Whistle is CPU-only. AMD/Vulkan/DirectML and Apple MLX are not offered. Audio never goes to an inference service, and package telemetry is disabled.
 
 ## Saved files
 
-Each capture or saved-audio transcription creates `transcripts/<date-and-time>/`:
+Each recording or import creates `transcripts/<date-and-time>/`:
 
-- `Transcript.txt`: timestamped text, updated as final-pass sections finish.
-- `Audio.wav`: captured audio, written before inference. For reruns, `session.json` references the existing WAV instead.
-- `segments.jsonl`: recognized segments and available word timestamps.
-- `session.json`: model, device, source, status, and measured inference time. Cancelled/error jobs are never marked complete.
+- `Audio.wav`: the captured audio, written before inference. Imports are decoded to 16 kHz mono here. Re-transcriptions reference the original WAV in `session.json` instead of copying it.
+- `Transcript.txt`: timestamped text, updated as sections finish and rewritten when you rename or edit.
+- `segments.jsonl`: recognizer segments with word timestamps where available. Never modified after recording.
+- `edits.json`: your edits, if any.
+- `session.json`: title, source, model, device, status, duration, and inference timing. Cancelled or failed jobs are never marked complete. A session that was still running when Whistle closed shows as *Interrupted*, with a **Transcribe Again** button.
 - `inference.log`: backend diagnostics.
 
-Recordings and transcripts remain until you delete them. The original lectures and comparison artifacts are preserved.
+Recordings stay until you delete them; deleting moves the folder to the Recycle Bin.
 
 ## Capture scope
 
-Uses Windows process-loopback capture for the selected window's process and its children. Microphone audio and independent apps are excluded. Browsers can share a process tree across tabs/windows, so choosing Chrome can include other Chrome audio. Pause unrelated tabs or use a separately launched browser instance. Protected audio and audio rendered by an unrelated service may not be capturable.
+- **One app** uses Windows process-loopback capture for the app's process and its children. Browsers can share a process tree across tabs and windows, so choosing Chrome can include other Chrome tabs; the source picker warns about this.
+- **All system audio** captures everything except Whistle itself, so library playback is never recorded.
+- **Microphone** uses the default input device. If Windows privacy settings block desktop apps from the microphone, Whistle names the setting to change.
 
-## Setup and CUDA
+Stalled sources (for example, an app that is silent) are filled with silence in real time, so timestamps match the wall clock and mixed streams stay aligned. Protected audio, and audio rendered by an unrelated service, may not be capturable.
 
-Requires x64 Windows build 20348+, Python 3.12, and an audio output device. This machine uses Windows 11 build 26200.
+## Setup
+
+Requires x64 Windows build 20348+, Python 3.12, and Visual Studio or Build Tools with the *Desktop development with C++* workload.
 
 ```powershell
 python -m venv .venv
@@ -53,20 +80,47 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
-The capture helper build points to this machine's Visual Studio 2026 Community C++ tools and Windows SDK; adjust `build-capture.cmd` on another machine. Launchers use the project virtual environment.
+`build-capture.cmd` finds Visual Studio with `vswhere`, so you don't need to edit any paths. **Rebuild the capture helper after updating**: the new source and mixing modes need it, and an outdated helper produces a clear error. To launch, double-click **Launch Whistle.vbs** or **Launch Whistle.cmd**, or run `create-shortcut.ps1` to add a desktop shortcut. Launching a second time brings the running copy forward.
 
-Whisper CUDA needs an NVIDIA driver, CUDA 12 cuBLAS, and cuDNN 9 DLLs. The isolated worker searches installed CUDA toolkits and available PyTorch runtime DLL directories. Selecting GPU checks availability and reports missing dependencies. Inference checks free dedicated VRAM with a conservative reserve before loading. It does not deliberately spill models into shared system memory or alter other GPU jobs. GPU workers exit after each transcription to release model memory.
-
-The RTX 5070 Ti was validated with Small.en and Nemotron on CUDA. Nemotron uses official NeMo-Speech.cpp 0.2.0 Windows CPU/CUDA binaries verified against release SHA-256 checksums; its download action installs them if missing. Phonon uses `fermion-research==0.2.11` and its verified model download.
+Whisper on CUDA needs an NVIDIA driver, CUDA 12 cuBLAS, and cuDNN 9 DLLs. The isolated worker searches installed CUDA toolkits and PyTorch runtime DLL directories. Settings shows the GPU name and free VRAM, or what is missing. Before loading a model, inference checks free dedicated VRAM against a conservative reserve. GPU workers exit after each transcription to release memory. Nemotron uses official NeMo-Speech.cpp 0.2.0 Windows CPU/CUDA binaries, verified against the release SHA-256 checksums.
 
 ## Verification
 
-`tests/integration.py` exercises real app audio → WAV → final pass → saved document. `tests/idle.py` checks silence. `tests/isolation.py` checks unrelated-app exclusion at the Windows mixer dither floor. `tests/models_integration.py` runs six real model/device jobs and writes `models/benchmarks.json`. `tests/job_failures.py` checks decoder errors, cancellation, and native child-process cleanup. `tests/ui_smoke.py` exercises the pickers, preferences, model/device switching and actual CUDA availability check, and renders the widgets.
+Run the offline suite anywhere (Windows, Linux, CI); it needs no audio hardware, models, or GPU:
 
-These checks prove the tested paths ran and saved transcripts; they do not establish perfect transcription or a general quality leaderboard. Earlier comparisons are in `transcripts/Quality Test Results.txt`.
+```powershell
+.\.venv\Scripts\python.exe tests\offline.py
+```
+
+It drives the real recorder, worker protocol, library, settings, and app controller with stand-in capture helpers and a stand-in model. It covers mixing two streams, pause, cancellation, decoding compressed imports, re-transcription without copying, edits and every export format, preference rules, and live theme switching. CI runs it on Windows and Linux, and also compiles the native capture helper on Windows.
+
+These Windows checks need real hardware:
+
+- `tests/integration.py`: real app audio → WAV → final pass → saved document.
+- `tests/idle.py`: a silent app.
+- `tests/isolation.py`: unrelated apps are excluded.
+- `tests/models_integration.py`: six real model/device jobs; writes `models/benchmarks.json`.
+- `tests/job_failures.py`: decoder errors, cancellation, and native child cleanup.
+- `tests/ui_smoke.py`: live window list, app icons and names, and the real CUDA check.
+
+These prove the tested paths ran and saved transcripts. They do not establish perfect transcription or a general quality leaderboard. Earlier comparisons are in `transcripts/Quality Test Results.txt`.
+
+## Code map
+
+| File | Role |
+|---|---|
+| `app.py` | Controller: pill, library, tray, shortcut, single instance, jobs |
+| `pill.py` | The capture capsule and its animated states |
+| `library.py` | Library window: list, reader, editor, player, find, export |
+| `source_picker.py`, `settings_dialog.py`, `model_picker.py`, `welcome.py` | Dialogs |
+| `theme.py`, `widgets.py` | Colors, type, stylesheet, vector icons, switches, segmented controls, meters |
+| `capture_jobs.py` | Recording, live mixing, pause, conversion, and worker orchestration |
+| `asr_worker.py` | Isolated model process: download, convert, transcribe, GPU probe |
+| `sessions.py`, `transcriber.py` | Session files, paragraphs, edits, exports |
+| `native/capture.cpp` | App, system, and microphone capture for Windows |
 
 ## Sources and notices
 
-[Whistle](https://huggingface.co/Cactus-Compute/whistle), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Nemotron 3.5](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b), [NVIDIA native runtime](https://github.com/NVIDIA/NeMo-Speech.cpp), [Phonon-2](https://huggingface.co/FermionResearch/Phonon-2), [Phonon runtime](https://github.com/fermionresearch/phonon), [Microsoft process-loopback documentation](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/).
+[Whistle](https://huggingface.co/Cactus-Compute/whistle), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Nemotron 3.5](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b), [NVIDIA native runtime](https://github.com/NVIDIA/NeMo-Speech.cpp), [Phonon-2](https://huggingface.co/FermionResearch/Phonon-2), [Phonon runtime](https://github.com/fermionresearch/phonon), [PyAV](https://github.com/PyAV-Org/PyAV), [Microsoft process-loopback documentation](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/).
 
 Phonon-2 derives from NVIDIA Parakeet TDT 0.6B v3; its weights are CC-BY-4.0 and its CLI/runtime is Apache-2.0. Notices are retained in downloaded packages. Nemotron model terms are linked from its card; its native runtime is Apache-2.0. Keep this folder in place so the desktop shortcut continues to work.

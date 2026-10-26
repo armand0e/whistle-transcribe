@@ -1,125 +1,181 @@
-"""Model comparison and on-demand downloads for the pill."""
+"""Model cards with on-demand downloads, shown in Settings › Models."""
 import json
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QHeaderView
-from capture_jobs import HelperJob
-from model_catalog import MODELS, BY_KEY, ROOT, model_path
 
-class ModelPicker(QDialog):
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QFont, QPainter, QPen
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+
+import theme
+from capture_jobs import HelperJob
+from model_catalog import BY_KEY, MODELS, ROOT, model_path
+from widgets import ProgressRing, label
+
+def benchmarks():
+    try:
+        return json.loads((ROOT / 'models' / 'benchmarks.json').read_text(encoding='utf-8'))['results']
+    except (OSError, ValueError, KeyError):
+        return {}
+
+class Radio(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(22, 22)
+        self.checked = False
+        self.available = True
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.checked:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(theme.color('accent'))
+            painter.drawEllipse(QRectF(1, 1, 20, 20))
+            painter.drawPixmap(4, 4, theme.pixmap('checkmark', '#FFFFFF', 14))
+        else:
+            painter.setPen(QPen(theme.color('tertiary' if self.available else 'separator'), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QRectF(1.5, 1.5, 19, 19))
+
+class ModelRow(QFrame):
+    clicked = Signal(str)
+    download = Signal(str)
+
+    def __init__(self, model, measured):
+        super().__init__()
+        self.key = model.key
+        self.setObjectName('Card')
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(14)
+        self.radio = Radio()
+        layout.addWidget(self.radio, 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(3)
+        heading = QHBoxLayout()
+        heading.setSpacing(8)
+        heading.addWidget(label(model.name, size=14, weight=QFont.Weight.DemiBold))
+        if model.key == 'small_en':
+            badge = label('Recommended', size=11, weight=QFont.Weight.DemiBold)
+            badge.setStyleSheet(f"color: {theme.tokens()['accent']}; background: {theme.tokens()['accent_soft']};"
+                                'border-radius: 6px; padding: 1px 6px;')
+            heading.addWidget(badge)
+        heading.addStretch()
+        text.addLayout(heading)
+        facts = [model.size, 'CPU' if model.cpu_only else 'CPU or GPU',
+                 'English' if model.english_only else ('Multilingual' if len(model.languages) > 8 else 'European languages'),
+                 f'Quality: {model.quality}', f'Speed: {model.speed}']
+        if model.vocabulary:
+            facts.append('Vocabulary')
+        text.addWidget(label('  ·  '.join(facts), 'caption', wrap=True))
+        description = model.description
+        if measured:
+            description += '  Local 56 s clip: ' + ', '.join(f'{device.upper()} {run["elapsed_seconds"]:.1f} s'
+                                                            for device, run in measured.items()) + '.'
+        text.addWidget(label(description, 'caption', wrap=True))
+        layout.addLayout(text, 1)
+        self.action = QPushButton()
+        self.action.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.action.clicked.connect(lambda: self.download.emit(self.key))
+        layout.addWidget(self.action, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.ring = ProgressRing(20, theme.tokens()['accent'], theme.tokens()['control'])
+        self.ring.hide()
+        layout.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.installed = False
+
+    def update_state(self, selected, installed, downloading, busy):
+        self.installed = installed
+        self.radio.checked = selected
+        self.radio.available = installed
+        self.radio.update()
+        self.ring.setVisible(downloading)
+        if downloading:
+            self.ring.colour, self.ring.track = theme.color('accent'), theme.color('control')
+            self.ring.set_value(None)
+        self.action.setVisible(not installed or downloading)
+        self.action.setText('Cancel' if downloading else 'Get')
+        self.action.setToolTip('' if downloading else 'Download this model')
+        self.action.setProperty('kind', 'plain' if downloading else 'soft')
+        self.action.style().unpolish(self.action)
+        self.action.style().polish(self.action)
+        self.action.setEnabled(downloading or not busy)
+        self.setToolTip('' if installed else 'Download this model to use it')
+        selected_border = theme.tokens()['accent'] if selected else 'transparent'
+        self.setStyleSheet(f'#Card {{ border: 1.5px solid {selected_border}; }}')
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.installed:
+            self.clicked.emit(self.key)
+
+class ModelList(QWidget):
+    """Every model as a card. Selecting needs the model installed; downloads are resumable."""
+    selected_changed = Signal(str)
+    status = Signal(str)
+
     def __init__(self, selected, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Transcription models · Whistle')
-        self.resize(850, 490)
         self.selected = selected
         self.job = None
-        self.closing = False
+        self.job_key = None
         layout = QVBoxLayout(self)
-        heading = QLabel('Choose your transcription model')
-        heading.setStyleSheet('font-size: 21px; font-weight: 600; padding: 8px 0;')
-        layout.addWidget(heading)
-        note = QLabel('Quality and speed are relative guidance, not guaranteed scores.\nWhistle, Small.en, Phonon-2 and Nemotron were tried on your lecture audio. Larger Whisper options are unbenchmarked here.')
-        note.setObjectName('muted'); note.setWordWrap(True)
-        layout.addWidget(note)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(['Model', 'Quality guidance', 'Speed guidance', 'Device', 'Download', 'Status'])
-        self.tree.setRootIsDecorated(False)
-        self.tree.header().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.header().setStretchLastSection(True)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        measured = benchmarks()
+        self.rows = {}
         for model in MODELS:
-            item = QTreeWidgetItem([model.name, model.quality, model.speed,
-                                   'CPU' if model.key == 'whistle' or model.cpu_only else 'CPU / CUDA', model.size, ''])
-            item.setData(0, Qt.ItemDataRole.UserRole, model.key)
-            self.tree.addTopLevelItem(item)
-            if model.key == selected:
-                self.tree.setCurrentItem(item)
-        layout.addWidget(self.tree)
-        self.description = QLabel('')
-        self.description.setWordWrap(True)
-        self.description.setMinimumHeight(48)
-        layout.addWidget(self.description)
-        self.status = QLabel('Models run locally. Downloads happen once; recordings stay on this computer.')
-        self.status.setObjectName('muted'); self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        row = QHBoxLayout()
-        self.download = QPushButton('Download model')
-        self.download.clicked.connect(self.download_selected)
-        row.addWidget(self.download)
-        row.addStretch()
-        self.use = QPushButton('Use model'); self.use.setObjectName('record')
-        self.use.clicked.connect(self.choose)
-        row.addWidget(self.use)
-        layout.addLayout(row)
-        self.tree.currentItemChanged.connect(self.refresh)
-        self.tree.itemDoubleClicked.connect(lambda *_: self.choose())
+            row = ModelRow(model, measured.get(model.key, {}))
+            row.clicked.connect(self.choose)
+            row.download.connect(self.toggle_download)
+            layout.addWidget(row)
+            self.rows[model.key] = row
+        self.message = label('Models run on this PC. Each downloads once; audio never leaves your computer.', 'caption', wrap=True)
+        layout.addWidget(self.message)
         self.refresh()
 
-    def current_key(self):
-        item = self.tree.currentItem()
-        return item.data(0, Qt.ItemDataRole.UserRole) if item else self.selected
+    def busy(self):
+        return self.job is not None and self.job.isRunning()
 
-    def refresh(self, *_):
-        for index in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(index)
-            item.setText(5, 'Ready' if model_path(item.data(0, Qt.ItemDataRole.UserRole)) else 'Not downloaded')
-        model = BY_KEY[self.current_key()]
-        description = model.description + (' English only.' if model.english_only else '')
-        try:
-            measured = json.loads((ROOT / 'models' / 'benchmarks.json').read_text(encoding='utf-8'))['results'].get(model.key, {})
-            if measured:
-                description += '\nLocal 56s clip, including startup: ' + ' · '.join(f'{device.upper()} {run["elapsed_seconds"]:.1f}s' for device, run in measured.items())
-        except (OSError, ValueError, KeyError):
-            pass
-        self.description.setText(description)
-        busy = self.job is not None and self.job.isRunning()
-        ready = model_path(model.key) is not None
-        self.use.setEnabled(ready and not busy)
-        self.download.setEnabled(not ready or busy)
-        self.download.setText('Cancel download' if busy else f'Download {model.size}')
+    def refresh(self):
+        for key, row in self.rows.items():
+            row.update_state(key == self.selected, model_path(key) is not None, self.busy() and key == self.job_key, self.busy())
 
-    def choose(self):
-        if self.use.isEnabled():
-            self.selected = self.current_key()
-            self.accept()
-
-    def download_selected(self):
-        if self.job and self.job.isRunning():
-            self.job.cancel()
-            self.status.setText('Cancelling download… Partial downloads can be resumed.')
+    def choose(self, key):
+        if model_path(key) is None:
             return
-        key = self.current_key()
-        self.job = HelperJob(['download', '--model', key])
-        self.job.event.connect(self.on_event)
-        self.job.failed.connect(lambda message: self.status.setText(message))
-        self.job.finished.connect(self.download_done)
-        self.tree.setEnabled(False); self.use.setEnabled(False)
-        self.download.setText('Cancel download'); self.download.setEnabled(True)
-        self.status.setText(f'Downloading {BY_KEY[key].name} ({BY_KEY[key].size})…')
-        self.job.start()
-
-    def on_event(self, event):
-        if event['kind'] == 'status':
-            self.status.setText(event['text'])
-        elif event['kind'] == 'ready':
-            self.status.setText('Download complete. Ready to use.')
-
-    def download_done(self):
-        self.tree.setEnabled(True)
-        if self.job.cancelled.is_set():
-            self.status.setText('Download cancelled. Choose Download to resume later.')
+        self.selected = key
         self.refresh()
-        if self.closing:
-            super().reject()
+        self.selected_changed.emit(key)
 
-    def reject(self):
-        if self.job and self.job.isRunning():
-            self.closing = True
+    def toggle_download(self, key):
+        if self.busy():
+            if key == self.job_key:
+                self.job.cancel()
+                self.message.setText('Cancelling… Partial downloads resume next time.')
+            return
+        self.job_key = key
+        self.job = HelperJob(['download', '--model', key])
+        self.job.event.connect(self._event)
+        self.job.failed.connect(lambda message: self.message.setText(message))
+        self.job.finished.connect(self._done)
+        self.message.setText(f'Downloading {BY_KEY[key].name} ({BY_KEY[key].size})…')
+        self.job.start()
+        self.refresh()
+
+    def _event(self, event):
+        if event['kind'] == 'status':
+            self.message.setText(event['text'])
+        elif event['kind'] == 'ready':
+            self.message.setText(f'{BY_KEY[self.job_key].name} is ready.')
+
+    def _done(self):
+        key, job = self.job_key, self.job
+        if job.cancelled.is_set():
+            self.message.setText('Download cancelled. Choose Download to resume later.')
+        self.refresh()
+        if not job.error and not job.cancelled.is_set() and model_path(key):
+            self.choose(key)
+
+    def shutdown(self):
+        if self.busy():
             self.job.cancel()
-            self.status.setText('Cancelling download…')
-        else:
-            super().reject()
-
-    def closeEvent(self, event):
-        if self.job and self.job.isRunning():
-            event.ignore(); self.reject()
-        else:
-            event.accept()
+            self.job.wait(5000)

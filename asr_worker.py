@@ -10,6 +10,7 @@ import contextlib
 import subprocess
 
 from model_catalog import BY_KEY, CACHE, ROOT, model_path, validate_choice, nemo_executable
+from process_control import NO_WINDOW
 
 os.environ['NEEDLE_TELEMETRY'] = '0'
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
@@ -58,7 +59,7 @@ def transcribe(args):
     validate_choice(args.model, args.device, args.language)
     path = model_path(args.model)
     if path is None:
-        raise RuntimeError('This model is not installed. Download it in the model picker, then retry your saved audio.')
+        raise RuntimeError('This model is not installed. Download it in Settings › Models, then transcribe the recording again from the library.')
     started = time.perf_counter()
     import numpy as np
     import soxr
@@ -72,6 +73,7 @@ def transcribe(args):
         emit('complete', duration=duration, elapsed_seconds=time.perf_counter() - started, device=args.device)
         return
     language = 'en' if BY_KEY[args.model].english_only else args.language
+    detected = None
     if args.model == 'phonon2':
         os.environ['FERMION_DEVICE'] = 'cpu'
         os.environ['FERMION_CACHE_DIR'] = str(ROOT / 'models' / 'phonon')
@@ -101,7 +103,7 @@ def transcribe(args):
         emit('status', text=f'Running Nemotron on {args.device.upper()}…')
         command = [str(binary), 'transcribe', str(args.audio.resolve()), '--model', str(path),
                    '--device', args.device, '--language', {'en': 'en-US', 'de': 'de-DE', 'fr': 'fr-FR', 'es': 'es-ES', 'it': 'it-IT', 'nl': 'nl-NL', 'pl': 'pl-PL'}.get(language, language or 'auto'), '--format', 'json']
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=sys.stderr, creationflags=subprocess.CREATE_NO_WINDOW)
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=sys.stderr, creationflags=NO_WINDOW)
         if result.returncode:
             raise RuntimeError(f'Nemotron exited ({result.returncode}); see inference.log. Select CPU if CUDA is unavailable.')
         details = json.loads(result.stdout.decode('utf-8-sig'))
@@ -128,6 +130,7 @@ def transcribe(args):
     elif args.model == 'whistle':
         from needle import Whistle
         model = Whistle(weights=path)
+        keywords = [term.strip() for term in (args.vocabulary or '').split(',') if term.strip()]
         samples = soxr.resample(samples, rate, 16000).astype(np.float32)
         position = 0
         while position < len(samples):
@@ -136,7 +139,8 @@ def transcribe(args):
                 candidates = np.arange(position + 18 * 16000, end, 1600)
                 energies = [np.mean(samples[p-1600:p+1600] ** 2) for p in candidates]
                 end = int(candidates[int(np.argmin(energies))])
-            result = model.transcribe(samples[position:end], language=language, word_timestamps=True)
+            result = model.transcribe(samples[position:end], language=language, word_timestamps=True,
+                                      **({'keywords': keywords} if keywords else {}))
             for word in result.get('words', []):
                 word['start'] += position / 16000
                 word['end'] += position / 16000
@@ -164,7 +168,8 @@ def transcribe(args):
         # VAD removes long silence while retaining original recording timestamps.
         audio_16k = soxr.resample(samples, rate, 16000).astype(np.float32) if rate != 16000 else samples
         segments, info = model.transcribe(audio_16k, language=language, beam_size=5,
-                                         word_timestamps=True, vad_filter=True)
+                                         word_timestamps=True, vad_filter=True, hotwords=args.vocabulary or None)
+        detected = info.language
         for segment in segments:
             result = {'text': segment.text.strip(), 'words': [
                 {'word': word.word.strip(), 'start': word.start, 'end': word.end, 'probability': word.probability}
@@ -173,15 +178,47 @@ def transcribe(args):
             emit('segment', result=result)
             emit('progress', percent=min(99, round(100 * segment.end / duration)))
     emit('complete', duration=duration, elapsed_seconds=time.perf_counter() - started,
-         device=args.device, compute_type=compute_type)
+         device=args.device, compute_type=compute_type, language=detected or language)
+
+def convert(source, output):
+    """Decode any audio or video file to a 16 kHz mono PCM16 WAV that every model can read."""
+    import wave
+    import av
+    emit('status', text='Preparing audio…')
+    temporary = output.with_suffix('.partial')
+    try:
+        with av.open(str(source)) as container:
+            if not container.streams.audio:
+                raise RuntimeError('This file has no audio track.')
+            stream = container.streams.audio[0]
+            duration = float(stream.duration * stream.time_base) if stream.duration else (container.duration or 0) / 1_000_000
+            resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
+            reported = -1
+            with wave.open(str(temporary), 'wb') as file:
+                file.setnchannels(1); file.setsampwidth(2); file.setframerate(16000)
+                for frame in container.decode(stream):
+                    for converted in resampler.resample(frame):
+                        file.writeframes(converted.to_ndarray().tobytes())
+                    if duration and frame.time is not None and int(100 * frame.time / duration) > reported:
+                        reported = min(99, int(100 * frame.time / duration))
+                        emit('progress', percent=reported)
+                for converted in resampler.resample(None):
+                    file.writeframes(converted.to_ndarray().tobytes())
+    except av.error.FFmpegError as exc:
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(f'Whistle could not read this file: {exc}') from exc
+    os.replace(temporary, output)
+    emit('converted', path=str(output))
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['download', 'transcribe', 'probe'])
+    parser.add_argument('action', choices=['download', 'transcribe', 'probe', 'convert'])
     parser.add_argument('--model', choices=BY_KEY, default='small_en')
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
     parser.add_argument('--audio', type=Path)
     parser.add_argument('--language')
+    parser.add_argument('--vocabulary')
+    parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     try:
         if args.action == 'probe':
@@ -189,6 +226,10 @@ def main():
             emit('probe', **cuda_probe())
         elif args.action == 'download':
             download(args.model)
+        elif args.action == 'convert':
+            if args.audio is None or args.output is None:
+                raise ValueError('Choose an audio file to import.')
+            convert(args.audio, args.output)
         else:
             if args.audio is None:
                 raise ValueError('Select a saved WAV recording.')
