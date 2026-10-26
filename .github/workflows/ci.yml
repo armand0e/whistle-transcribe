@@ -33,6 +33,7 @@ jobs:
         run: |
           $output = & .\bin\capture.exe 2>&1
           if ($LASTEXITCODE -ne 1 -or "$output" -notmatch 'Usage') { throw "Unexpected helper output: $output" }
+          exit 0  # The runner would otherwise re-raise the helper's expected exit code 1.
       - name: Run offline tests
         env:
           QT_QPA_PLATFORM: offscreen
