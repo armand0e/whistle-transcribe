@@ -80,7 +80,17 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
-`build-capture.cmd` finds Visual Studio with `vswhere`, so you don't need to edit any paths. **Rebuild the capture helper after updating**: the new source and mixing modes need it, and an outdated helper produces a clear error. To launch, double-click **Launch Whistle.vbs** or **Launch Whistle.cmd**, or run `create-shortcut.ps1` to add desktop and Start-menu shortcuts (search **Whistle** in Windows). Both shortcuts point to this checkout. Launching a second time brings the running copy forward.
+`build-capture.cmd` finds Visual Studio with `vswhere`, so you don't need to edit any paths. To launch, double-click **Launch Whistle.vbs** or **Launch Whistle.cmd**, or run `create-shortcut.ps1` to add desktop and Start-menu shortcuts (search **Whistle** in Windows). Both shortcuts point to this checkout. Launching a second time brings the running copy forward.
+
+### Automatic updates
+
+The launcher checks this repository's GitHub `main` branch on each full start and applies merged changes automatically. It uses your existing Git credentials, updates Python dependencies when `requirements.txt` changes, and rebuilds the capture helper when its source or build script changes. The first launch through the new updater prepares these once. A small progress window shows what is happening.
+
+**Quit Whistle from its tray menu, then reopen it from Windows Search** to pick up a newly merged PR. Opening the shortcut while Whistle is already running just brings it forward; recording and transcription are not interrupted. Closing the library alone leaves Whistle running in the tray.
+
+Updates require Git and the initial setup above. They apply only to a clean checkout of `main` with the expected GitHub origin and fast-forward history. Local edits, untracked source files, development branches, and local commits are preserved by skipping the update. Models, recordings, transcripts, settings, and the virtual environment are never replaced by Git updates. If GitHub cannot be reached, Whistle opens the installed copy. A failed dependency install or capture build shows an error and retries on the next launch; the prior capture executable is kept until a replacement builds successfully.
+
+**Settings › General › Updates** shows the last result and opens `.updates/update.log`. Starting `app.py` directly bypasses the updater; after a manual pull, install changed requirements and rebuild the helper yourself.
 
 Whisper on CUDA needs an NVIDIA driver, CUDA 12 cuBLAS, and cuDNN 9 DLLs. The isolated worker searches installed CUDA toolkits and PyTorch runtime DLL directories. Settings shows the GPU name and free VRAM, or what is missing. Before loading a model, inference checks free dedicated VRAM against a conservative reserve. GPU workers exit after each transcription to release memory. Nemotron uses official NeMo-Speech.cpp 0.2.0 Windows CPU/CUDA binaries, verified against the release SHA-256 checksums.
 
@@ -93,6 +103,8 @@ Run the offline suite anywhere (Windows, Linux, CI); it needs no audio hardware,
 ```
 
 It drives the real recorder, worker protocol, library, settings, and app controller with stand-in capture helpers and a stand-in model. It covers mixing two streams, pause, cancellation, decoding compressed imports, re-transcription without copying, edits and every export format, preference rules, and live theme switching. CI runs it on Windows and Linux, and also compiles the native capture helper on Windows.
+
+`tests/update_offline.py` uses real temporary local Git repositories to verify update application, retry behavior, and preservation of local work and app data. It uses stand-ins for dependency installation and compilation and needs no GitHub access.
 
 These Windows checks need real hardware:
 
@@ -110,6 +122,7 @@ These prove the tested paths ran and saved transcripts. They do not establish pe
 | File | Role |
 |---|---|
 | `app.py` | Controller: pill, library, tray, shortcut, single instance, jobs |
+| `launch.py`, `auto_update.py` | Startup progress window, GitHub updates, dependency and capture preparation |
 | `pill.py` | The capture capsule and its animated states |
 | `library.py` | Library window: list, reader, editor, player, find, export |
 | `source_picker.py`, `settings_dialog.py`, `model_picker.py`, `welcome.py` | Dialogs |

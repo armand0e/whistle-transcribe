@@ -15,6 +15,7 @@ settings.json
 settings.tmp
 ui-state.json
 whistle.lock
+.updates/
 .env
 .env.*
 !.env.example

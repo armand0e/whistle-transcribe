@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QPlainTextEdit, QPushButton, 
                                QStackedWidget, QVBoxLayout, QWidget)
 
 import theme
+from auto_update import ROOT, update_status
 from model_catalog import BY_KEY, LANGUAGES, supports_language
 from model_picker import ModelList
 from sessions import TRANSCRIPTS
@@ -108,6 +109,20 @@ class SettingsWindow(QDialog):
         reveal.clicked.connect(lambda: (TRANSCRIPTS.mkdir(exist_ok=True), QDesktopServices.openUrl(QUrl.fromLocalFile(str(TRANSCRIPTS)))))
         card.add_row('Transcripts folder', reveal, str(TRANSCRIPTS))
         self._section(layout, 'STORAGE', card, 'Recordings and transcripts stay on this PC until you delete them.')
+
+        card = GroupedCard()
+        log = QPushButton('Open update log')
+        log_path = ROOT / '.updates' / 'update.log'
+        log.setEnabled(log_path.is_file())
+        log.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path))))
+        status = update_status()
+        detail = status.get('message', 'Checks GitHub main automatically when launched from your Whistle shortcut.')
+        if status.get('checked'):
+            detail += '\nLast check: ' + status['checked']
+        card.add_row('Automatic updates', log, detail)
+        self._section(layout, 'UPDATES', card,
+                      'To install newly merged changes, quit Whistle from the tray, then reopen it. '
+                      'Updates wait while the app is running.')
         layout.addStretch()
         return page
 
