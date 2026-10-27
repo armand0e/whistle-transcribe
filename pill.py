@@ -2,7 +2,7 @@
 import math
 import time
 
-from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation,
+from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation,
                             Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractButton, QGraphicsOpacityEffect, QHBoxLayout, QStackedWidget,
@@ -207,6 +207,8 @@ class Pill(QWidget):
         self.setWindowTitle('Whistle')
         self.state = 'idle'
         self.drag = None
+        self._anchor = None
+        self._resizing = False
         self.capsule_width = 420
         self.level_peak = 0.0
         self.last_sound = None
@@ -367,22 +369,31 @@ class Pill(QWidget):
             self.fade.setEnabled(True)
             self.fade_animation.start()
         target = self._target_width()
+        if self.morph.state() == QAbstractAnimation.State.Running and self.morph.endValue() == float(target):
+            return  # Progress text changed, but the resize already has the right destination.
         if self.isVisible() and abs(target - self.capsule_width) > 1:
             self.morph.stop()
             self.morph.setStartValue(float(self.capsule_width))
             self.morph.setEndValue(float(target))
             self.morph.start()
         else:
+            self.morph.stop()
             self._apply_width(target)
 
     def _apply_width(self, width):
-        centre = self.geometry().center().x() if self.isVisible() else None
         self.capsule_width = width
         total = int(round(width)) + 2 * SHADOW
-        self.setFixedSize(total, HEIGHT + 2 * SHADOW)
-        self.stack.setGeometry(SHADOW + 12, SHADOW + 7, int(round(width)) - 24, HEIGHT - 14)
-        if centre is not None:
-            self.move(centre - total // 2, self.y())
+        # QRect.center() uses inclusive integer coordinates. Recomputing it on
+        # each frame and subtracting width // 2 loses a pixel for even widths.
+        # Keep one continuous center instead; only round the final window origin.
+        self._resizing = True
+        try:
+            self.setFixedSize(total, HEIGHT + 2 * SHADOW)
+            self.stack.setGeometry(SHADOW + 12, SHADOW + 7, int(round(width)) - 24, HEIGHT - 14)
+            if self._anchor is not None:
+                self.move(round(self._anchor.x() - total / 2), round(self._anchor.y() - self.height() / 2))
+        finally:
+            self._resizing = False
         self.update()
 
     def set_source(self, title, subtitle, picture=None):
@@ -467,6 +478,12 @@ class Pill(QWidget):
         x = min(max(position[0] - self.width() // 2, area.left()), area.right() - self.width())
         y = min(max(position[1] - self.height() // 2, area.top()), area.bottom() - self.height())
         self.move(x, y)
+        self._anchor = QPointF(x + self.width() / 2, y + self.height() / 2)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if not self._resizing:
+            self._anchor = QPointF(self.x() + self.width() / 2, self.y() + self.height() / 2)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -484,18 +501,21 @@ class Pill(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.drag = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            center = self._anchor if self._anchor is not None else QRectF(self.geometry()).center()
+            self.drag = event.globalPosition() - center
         elif event.button() == Qt.MouseButton.RightButton:
             self.menu_requested.emit(event.globalPosition().toPoint())
 
     def mouseMoveEvent(self, event):
         if self.drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self.drag)
+            center = event.globalPosition() - self.drag
+            self.move(round(center.x() - self.width() / 2), round(center.y() - self.height() / 2))
+            self._anchor = center
 
     def mouseReleaseEvent(self, event):
         if self.drag is not None:
             self.drag = None
-            self.moved.emit(self.geometry().center())
+            self.moved.emit(self._anchor.toPoint())
 
     def mouseDoubleClickEvent(self, event):
         if self.state == 'result':
