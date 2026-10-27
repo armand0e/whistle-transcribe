@@ -115,7 +115,7 @@ class Recorder(QThread):
     progress = Signal(int)
 
     def __init__(self, window, language=None, output=None, model_key='small_en', device='cpu', source_audio=None,
-                 include_mic=False, vocabulary='', title=None, import_audio=False):
+                 include_mic=False, vocabulary='', title=None, import_audio=False, source_url=None):
         super().__init__()
         self.window, self.language = window, language
         self.model_key, self.device = model_key, device
@@ -125,6 +125,7 @@ class Recorder(QThread):
         self.output = output or ROOT / 'transcripts'
         self.source_audio = Path(source_audio).resolve() if source_audio else None
         self.import_audio = import_audio
+        self.source_url = source_url
         self.stopping = threading.Event()
         self.cancelled = threading.Event()
         self.paused = threading.Event()
@@ -323,6 +324,31 @@ class Recorder(QThread):
         if not self.cancelled.is_set() and (code or not completed):
             raise RuntimeError(f'Transcription stopped unexpectedly ({code}). Captured audio is saved; transcribe it again from the library.')
 
+    def download_url(self):
+        self.set_phase('preparing')
+        self.document.metadata.update(status='preparing', source_url=self.source_url, capture_scope='downloaded video audio')
+        self.document.save()
+        self.status.emit('Downloading video audio…')
+        result = {}
+        def handle(event):
+            if event.get('kind') == 'downloaded':
+                result.update(event)
+                return True
+            return False
+        code, completed = self.run_helper(['import-url', '--url', self.source_url, '--output',
+                                          str(self.document.directory)], 'inference.log', handle)
+        if self.cancelled.is_set():
+            return None
+        if code or not completed:
+            raise RuntimeError('The video download did not finish. See inference.log for details.')
+        path = Path(result['path']).resolve()
+        if not path.is_relative_to(self.document.directory.resolve()) or not path.is_file():
+            raise RuntimeError('The downloader returned an invalid audio file.')
+        self.document.metadata.update(title=result['title'], source=result['title'],
+                                      webpage_url=result.get('webpage_url', self.source_url), source_audio=str(path))
+        self.document.save()
+        return path
+
     def run(self):
         try:
             validate_choice(self.model_key, self.device, self.language)
@@ -332,7 +358,15 @@ class Recorder(QThread):
                                        title=self.title, vocabulary=self.vocabulary or None)
             self.document.metadata['capture_scope'] = capture_scope(self.window, self.include_mic)
             self.saved.emit(str(self.document.path))
-            if self.source_audio:
+            if self.source_url:
+                downloaded = self.download_url()
+                audio_path = self.document.directory / 'Audio.wav'
+                if downloaded and not self.cancelled.is_set():
+                    self.convert(downloaded, audio_path)
+                    # Keep the original download if conversion fails; remove it only once our WAV is ready.
+                    if not self.cancelled.is_set() and audio_path.is_file():
+                        downloaded.unlink()
+            elif self.source_audio:
                 audio_path = self.source_audio
                 self.document.metadata['source_audio'] = str(audio_path)
                 self.document.metadata['capture_scope'] = 'saved audio'

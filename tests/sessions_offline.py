@@ -2,12 +2,14 @@
 from datetime import datetime, timedelta
 import json
 import re
+import sys
+import threading
 
 from offline_helpers import fresh
 from model_catalog import validate_choice, supports_language
 from preferences import Preferences
 from sessions import cues, date_group, export_text, export_filename, list_sessions, load_session
-from transcriber import Transcript
+from transcriber import Transcript, write_atomic
 from windows_audio import Window
 
 folder = fresh('sessions')
@@ -88,3 +90,18 @@ assert preferences['language'] == 'en', 'English-only models force English'
 (folder / 'settings.json').write_text('{"model": "missing", "device": "cuda", "unknown": 1}', encoding='utf-8')
 assert Preferences(folder / 'settings.json')['model'] == 'small_en'
 print('PASS: model/device/language rules and preference recovery', flush=True)
+
+if sys.platform == 'win32':
+    target = folder / 'sharing.json'
+    target.write_text('original')
+    # Python's Windows read handle denies delete sharing, just like a concurrent
+    # library read. Release it while write_atomic is retrying the atomic rename.
+    handle = target.open('r')
+    release = threading.Timer(0.06, handle.close)
+    release.start()
+    try:
+        write_atomic(target, 'replacement')
+    finally:
+        release.join(); handle.close()
+    assert target.read_text() == 'replacement' and not target.with_suffix('.json.tmp').exists()
+    print('PASS: atomic transcript saves tolerate a temporary Windows reader lock', flush=True)

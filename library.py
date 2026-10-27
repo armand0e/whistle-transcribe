@@ -8,7 +8,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QKeySequence, QPaint
                            QTextCharFormat, QTextCursor)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect,
-                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+                               QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                                QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QStyle,
                                QStyledItemDelegate, QTextBrowser, QTextEdit, QVBoxLayout, QWidget)
 
@@ -567,6 +567,7 @@ class Library(QMainWindow):
     pause_requested = Signal()
     cancel_requested = Signal()
     import_requested = Signal(list)
+    url_requested = Signal(str)
     retranscribe_requested = Signal(object, object)
     settings_requested = Signal()
 
@@ -623,6 +624,9 @@ class Library(QMainWindow):
         importer = IconButton('import', 'Import Audio or Video…  (Ctrl+O)', 17)
         importer.clicked.connect(self.choose_import)
         top.addWidget(importer)
+        url_importer = IconButton('globe', 'Import Video URL…  (Ctrl+Shift+O)', 17)
+        url_importer.clicked.connect(self.choose_url)
+        top.addWidget(url_importer)
         layout.addLayout(top)
         search_row = QHBoxLayout()
         search_row.setContentsMargins(12, 0, 12, 4)
@@ -777,7 +781,7 @@ class Library(QMainWindow):
 
     def _shortcuts(self):
         for keys, callback in ((QKeySequence.StandardKey.Find, self.show_find), ('Ctrl+E', self.toggle_edit),
-                               ('Ctrl+O', self.choose_import), ('Ctrl+N', self.record_requested.emit),
+                               ('Ctrl+O', self.choose_import), ('Ctrl+Shift+O', self.choose_url), ('Ctrl+N', self.record_requested.emit),
                                ('Ctrl+,', self.settings_requested.emit), ('Escape', self._escape),
                                (QKeySequence.StandardKey.Save, self._save_shortcut), ('Delete', self._delete_shortcut)):
             QShortcut(QKeySequence(keys), self, callback)
@@ -914,6 +918,8 @@ class Library(QMainWindow):
             return
         live = self._is_live(session)
         status = session.display_status(self.live_directory)
+        retry = ('Transcribe Again' if session.audio_path else
+                 ('Retry URL Import' if session.metadata.get('source_url') else None))
         if live and self.live_phase == 'recording':
             self.banner.hide()
             self.body.setCurrentWidget(self.live)
@@ -932,14 +938,18 @@ class Library(QMainWindow):
             detail = f' · {self.live_percent}%' if self.live_percent is not None else (f' · {self.live_status}' if self.live_status else '')
             self.banner.show_message(what + detail, 'info', 'Cancel', busy=True, percent=self.live_percent)
         elif status == 'interrupted':
-            self.banner.show_message('Whistle closed before this finished. The audio is saved.', 'warning',
-                                     'Transcribe Again' if session.audio_path else None)
+            message = ('Whistle closed before this finished. The audio is saved.' if session.audio_path else
+                       ('Whistle closed before this import finished. Retry the URL to download it again.'
+                        if session.metadata.get('source_url') else 'Whistle closed before this finished.'))
+            self.banner.show_message(message, 'warning', retry)
         elif status == 'error':
             self.banner.show_message(session.metadata.get('error') or 'Transcription failed. The audio is saved.', 'error',
-                                     'Transcribe Again' if session.audio_path else None)
+                                     retry)
         elif status == 'cancelled':
-            self.banner.show_message('Transcription was cancelled. The audio is saved.', 'neutral',
-                                     'Transcribe Again' if session.audio_path else None)
+            message = ('Transcription was cancelled. The audio is saved.' if session.audio_path else
+                       ('The import was cancelled. Retry the URL to download it again.'
+                        if session.metadata.get('source_url') else 'Transcription was cancelled.'))
+            self.banner.show_message(message, 'neutral', retry)
         elif not paragraphs:
             self.banner.show_message('No speech was detected. Try another model, or check that the source was playing audio.',
                                      'neutral', 'Transcribe Again' if session.audio_path else None)
@@ -952,7 +962,10 @@ class Library(QMainWindow):
         if self._is_live(self.session):
             self.cancel_requested.emit()
         elif self.session:
-            self.retranscribe_requested.emit(self.session, None)
+            if not self.session.audio_path and self.session.metadata.get('source_url'):
+                self.url_requested.emit(self.session.metadata['source_url'])
+            else:
+                self.retranscribe_requested.emit(self.session, None)
 
     def _placeholder_primary(self):
         self.record_requested.emit()
@@ -1173,6 +1186,12 @@ class Library(QMainWindow):
                                                 f'Audio and video ({patterns});;All files (*)')
         if files:
             self.import_requested.emit(files)
+
+    def choose_url(self):
+        from url_dialog import UrlDialog
+        dialog = UrlDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.url_requested.emit(dialog.url)
 
     # --- Window ----------------------------------------------------------------------
 

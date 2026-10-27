@@ -212,7 +212,8 @@ def convert(source, output):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['download', 'transcribe', 'probe', 'convert'])
+    parser.add_argument('action', choices=['download', 'transcribe', 'probe', 'convert', 'import-url'])
+    parser.add_argument('--url')
     parser.add_argument('--model', choices=BY_KEY, default='small_en')
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
     parser.add_argument('--audio', type=Path)
@@ -226,6 +227,11 @@ def main():
             emit('probe', **cuda_probe())
         elif args.action == 'download':
             download(args.model)
+        elif args.action == 'import-url':
+            from url_import import download as download_url
+            if not args.url or args.output is None:
+                raise ValueError('Choose a video URL to import.')
+            download_url(args.url, args.output, emit)
         elif args.action == 'convert':
             if args.audio is None or args.output is None:
                 raise ValueError('Choose an audio file to import.')

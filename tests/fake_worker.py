@@ -15,7 +15,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument('action')
 parser.add_argument('--model'); parser.add_argument('--device'); parser.add_argument('--language')
 parser.add_argument('--audio', type=Path); parser.add_argument('--output', type=Path); parser.add_argument('--vocabulary')
+parser.add_argument('--url')
 args = parser.parse_args()
+if args.action == 'import-url':
+    from url_import import download
+    try:
+        download(args.url, args.output, emit)
+    except Exception as exc:
+        emit('error', message=str(exc))
+        sys.exit(1)
+    sys.exit(0)
 if args.action == 'convert':
     import asr_worker
     try:

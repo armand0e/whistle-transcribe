@@ -18,6 +18,7 @@ Whistle has two parts. The **pill** is a small capsule that floats above your wi
 - **Edit inline.** Fix names and typos, then press **Done**. Edits are stored next to the recognizer output, which is never overwritten. Click the title to rename a transcript.
 - **Export or copy.** Formats are plain text, Markdown, SRT and WebVTT subtitles (timed per word where available), and JSON.
 - **Import files.** Drag audio or video onto the library, or use **Import**. MP3, M4A, FLAC, OGG, Opus, WebM, MP4, MOV, MKV and WAV all work.
+- **Import a video URL.** Click the globe beside Import, press **Ctrl+Shift+O**, or choose **Import Video URL…** from the pill or tray menu. Paste a YouTube link or another supported video/audio URL; Whistle downloads its audio and creates a normal saved transcript with your selected model, language, processor, and vocabulary. Downloading and transcription can be cancelled. One video is imported; playlist-only links use the first video.
 - **Transcribe again with another model.** The new transcript reuses the same recording instead of copying it.
 - **Add your vocabulary.** List names, jargon and acronyms in Settings › Vocabulary, and Whisper and Whistle models are nudged toward those spellings.
 - **Light and dark.** The app follows Windows' theme automatically, matches the Windows 11 title bar, and uses its own vector icons and native-feeling controls.
@@ -59,6 +60,8 @@ Each recording or import creates `transcripts/<date-and-time>/`:
 - `inference.log`: backend diagnostics.
 
 Recordings stay until you delete them; deleting moves the folder to the Recycle Bin.
+
+URL imports use [yt-dlp](https://github.com/yt-dlp/yt-dlp), which supports YouTube and many other video sites, plus direct audio/video links. Support depends on the site; private, paid, DRM-protected, login-required, and live videos may not work. Import a downloaded file when a site blocks access. YouTube extraction needs a supported JavaScript runtime: Whistle automatically enables installed **Node.js 22+** or **Deno 2.3+**, along with the solver scripts installed by `yt-dlp[default]`. No separate ffmpeg executable is needed for ordinary single-stream downloads; the existing audio decoder handles conversion. Site access uses your network connection; speech recognition remains local. Source URLs and video titles are stored in `session.json`, and the downloaded media is removed only after the session's `Audio.wav` is ready.
 
 ## Capture scope
 
@@ -123,6 +126,7 @@ These prove the tested paths ran and saved transcripts. They do not establish pe
 |---|---|
 | `app.py` | Controller: pill, library, tray, shortcut, single instance, jobs |
 | `launch.py`, `auto_update.py` | Startup progress window, GitHub updates, dependency and capture preparation |
+| `url_dialog.py`, `url_import.py` | URL input, single-video download, metadata, and progress |
 | `pill.py` | The capture capsule and its animated states |
 | `library.py` | Library window: list, reader, editor, player, find, export |
 | `source_picker.py`, `settings_dialog.py`, `model_picker.py`, `welcome.py` | Dialogs |

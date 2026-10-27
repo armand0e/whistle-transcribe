@@ -20,6 +20,7 @@ from preferences import Preferences
 from settings_dialog import SettingsWindow
 from source_picker import SourcePicker, app_pixmap
 from welcome import Welcome
+from url_import import validate_url
 from windows_audio import MICROPHONE, SYSTEM_AUDIO, Window, list_windows, window_exists
 
 SERVER = 'whistle-' + hashlib.sha1(str(ROOT).casefold().encode()).hexdigest()[:12]
@@ -132,6 +133,7 @@ class Whistle(QObject):
         self.library.pause_requested.connect(self.pause)
         self.library.cancel_requested.connect(self.cancel)
         self.library.import_requested.connect(self.import_files)
+        self.library.url_requested.connect(self.import_url)
         self.library.retranscribe_requested.connect(self.retranscribe)
         self.library.settings_requested.connect(lambda: self.open_settings())
         self.tray = self._build_tray()
@@ -340,14 +342,15 @@ class Whistle(QObject):
     def _find_reopened(self, previous):
         return next((window for window in list_windows() if window.path and window.path == previous.path), None)
 
-    def start_job(self, source, source_audio=None, model_key=None, title=None, include_mic=False, import_audio=False):
+    def start_job(self, source, source_audio=None, model_key=None, title=None, include_mic=False, import_audio=False, source_url=None):
         model_key = model_key or self.preferences['model']
         device = 'cpu' if BY_KEY[model_key].cpu_only else self.preferences['device']
         language = self.preferences['language']
         if BY_KEY[model_key].english_only:
             language = 'en'
         self.job = Recorder(source, language, self.library.root, model_key=model_key, device=device, source_audio=source_audio,
-                            include_mic=include_mic, vocabulary=self.preferences['vocabulary'], title=title, import_audio=import_audio)
+                            include_mic=include_mic, vocabulary=self.preferences['vocabulary'], title=title,
+                            import_audio=import_audio, source_url=source_url)
         self.job_error, self.job_directory, self.job_title = None, None, title or source.title
         self.job_model = BY_KEY[model_key]
         self.job_percent = None
@@ -359,7 +362,7 @@ class Whistle(QObject):
         self.job.status.connect(self._status)
         self.job.failed.connect(self._failed)
         self.job.finished.connect(self._done)
-        if source_audio:
+        if source_audio or source_url:
             self.pill.show_working('Preparing', self.job_title)
         self.job.start()
         self._update_tray()
@@ -373,6 +376,7 @@ class Whistle(QObject):
             source = self.job.window
             self.pill.show_recording(source.app if source.kind == 'window' else source.title)
         elif phase == 'preparing':
+            self.job_percent = None
             self.pill.show_working('Preparing Audio', self.job_title)
         elif phase == 'transcribing':
             self.job_percent = None
@@ -426,6 +430,8 @@ class Whistle(QObject):
 
     def _done(self):
         job, directory = self.job, self.job_directory
+        if job.source_url and job.document:
+            self.job_title = job.document.metadata.get('title', self.job_title)
         self.last_finished = directory
         self.library.set_live(None, 'idle')
         self.library.refresh(select=directory if self.library.isVisible() else None)
@@ -436,9 +442,11 @@ class Whistle(QObject):
             return
         audio_saved = bool(job.source_audio or (job.document and (job.document.directory / 'Audio.wav').is_file()))
         if job.cancelled.is_set():
-            self.pill.show_result(False, 'Cancelled', 'Audio and any partial text are saved' if audio_saved else 'Nothing was recorded')
+            detail = ('Download cancelled; import the URL again to retry' if job.source_url and not audio_saved else
+                      ('Audio and any partial text are saved' if audio_saved else 'Nothing was recorded'))
+            self.pill.show_result(False, 'Cancelled', detail)
         elif job.error:
-            title = 'Couldn’t Transcribe' if audio_saved else 'Couldn’t Record'
+            title = 'Couldn’t Transcribe' if audio_saved else ('Couldn’t Import Video' if job.source_url else 'Couldn’t Record')
             self.pill.show_result(False, title, job.error.split('\n')[0], timeout=14000)
             if not directory:
                 alert(None, title, job.error)
@@ -460,10 +468,30 @@ class Whistle(QObject):
         if not self.busy():
             self._next_import()
 
+    def import_url(self, url):
+        try:
+            url = validate_url(url)
+        except ValueError as exc:
+            alert(self.library, 'Invalid video URL', str(exc))
+            return
+        if not self.ready_to_transcribe():
+            return
+        self.queue.append({'url': url})
+        if not self.busy():
+            self._next_import()
+
     def _next_import(self):
         if not self.queue or self.busy():
             return
-        path = Path(self.queue.pop(0))
+        item = self.queue.pop(0)
+        if isinstance(item, dict):
+            from urllib.parse import urlsplit
+            url = item['url']
+            title = 'Video from ' + urlsplit(url).hostname
+            source = Window(0, 0, title, urlsplit(url).hostname, kind='url')
+            self.start_job(source, title=title, source_url=url)
+            return
+        path = Path(item)
         source = Window(0, 0, path.stem, 'Imported file', kind='file')
         self.start_job(source, source_audio=path, title=path.stem, import_audio=True)
 
@@ -508,6 +536,8 @@ class Whistle(QObject):
         menu.addAction(theme.icon('library', theme.tokens()['text']), 'Open Library', lambda: self.open_library())
         action = menu.addAction(theme.icon('import', theme.tokens()['text']), 'Import Audio or Video…', self.library.choose_import)
         action.setEnabled(not self.busy())
+        action = menu.addAction(theme.icon('globe', theme.tokens()['text']), 'Import Video URL…', self.library.choose_url)
+        action.setEnabled(not self.busy())
         menu.addAction(theme.icon('sliders', theme.tokens()['text']), 'Settings…', lambda: self.open_settings())
         menu.addSeparator()
         menu.addAction('Hide Pill', self.pill.hide)
@@ -521,6 +551,7 @@ class Whistle(QObject):
         self.tray_record = menu.addAction('Start Recording', self.toggle_recording)
         menu.addAction('Show Pill', lambda: (self.pill.show(), self.pill.raise_()))
         menu.addAction('Open Library', lambda: self.open_library())
+        menu.addAction('Import Video URL…', self.library.choose_url)
         menu.addAction('Settings…', lambda: self.open_settings())
         menu.addSeparator()
         menu.addAction('Quit Whistle', self.quit)

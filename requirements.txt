@@ -7,3 +7,4 @@ ctranslate2==4.8.3
 av==19.0.2
 requests==2.34.2
 fermion-research==0.2.11
+yt-dlp[default]==2026.10.26

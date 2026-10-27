@@ -1,6 +1,7 @@
 """Durable transcript files and the local Whistle loader used by evaluation."""
 import json
 import os
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -63,7 +64,17 @@ def write_atomic(path, text):
         file.write(text)
         file.flush()
         os.fsync(file.fileno())
-    os.replace(temporary, path)
+    # Windows readers can briefly hold a handle without delete sharing while
+    # the library refreshes. Keep the completed temporary file and retry the
+    # atomic rename rather than turning a successful import into a failed job.
+    for attempt in range(6):
+        try:
+            os.replace(temporary, path)
+            break
+        except PermissionError as exc:
+            if getattr(exc, 'winerror', None) not in (5, 32) or attempt == 5:
+                raise
+            time.sleep(0.01 * (2 ** attempt))
 
 class Transcript:
     def __init__(self, window, language, output=ROOT / 'transcripts', model_key=None, device='cpu',
