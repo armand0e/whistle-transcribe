@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$whistleRoot = $PSScriptRoot
+$whistleRoot = Split-Path -Parent $PSScriptRoot
 $whistleShell = New-Object -ComObject WScript.Shell
 # Windows Search indexes per-user Start-menu apps. Both entries always launch
 # this checkout, so updating main updates what the user opens from Search.

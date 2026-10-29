@@ -3,17 +3,22 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import argparse
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--audio', type=Path, required=True, help='Speech WAV to play for the capture test')
+parser.add_argument('--expect', action='append', default=[], help='Optional expected transcription fragment')
+args = parser.parse_args()
+sys.path.insert(0, str(ROOT / 'src'))
 from PySide6.QtCore import QCoreApplication, QTimer
 from capture_jobs import Recorder
 from windows_audio import Window
 
 application = QCoreApplication([])
 player = subprocess.Popen([sys.executable, str(ROOT / 'tests' / 'play_audio.py'),
-                           str(ROOT / 'test-output' / 'speech.wav')],
+                           str(args.audio.resolve())],
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 pid = int(player.stdout.readline())
 worker = Recorder(Window(0, pid, 'Integration speech playback', 'test player'), 'en', ROOT / 'test-output' / 'sessions', model_key='whistle')
@@ -41,8 +46,8 @@ player.wait(timeout=5)
 assert not errors, errors
 assert saved, 'No document saved'
 text = Path(saved[0]).read_text(encoding='utf-8')
-assert 'quick brown fox' in text.casefold(), text
-assert 'transcription' in text.casefold(), text
+for phrase in args.expect:
+    assert phrase.casefold() in text.casefold(), text
 session = json.loads((Path(saved[0]).parent / 'session.json').read_text(encoding='utf-8'))
 assert session['status'] == 'complete', session
 assert (Path(saved[0]).parent / 'Audio.wav').stat().st_size > 44100 * 4

@@ -709,7 +709,7 @@ class Library(QMainWindow):
         self.share_button = IconButton('share', 'Export', 17)
         self.share_button.clicked.connect(self._export_menu)
         self.more_button = IconButton('more', 'More', 17)
-        self.more_button.clicked.connect(self._more_menu)
+        self.more_button.clicked.connect(lambda: self._more_menu())
         for button in (self.find_button, self.edit_button, self.copy_button, self.share_button, self.more_button):
             row.addWidget(button)
         self.done_button = QPushButton('Done')
@@ -876,6 +876,7 @@ class Library(QMainWindow):
         self.title.setCursorPosition(0)
         self._update_meta()
         live = self._is_live(session)
+        self.title.setReadOnly(live)
         audio = session.audio_path
         if live or not audio:
             self.player.unload()
@@ -974,6 +975,9 @@ class Library(QMainWindow):
         self.choose_import()
 
     def _rename(self):
+        if self.session and self._is_live(self.session):
+            self.title.setText(self.session.title)
+            return  # The worker owns this session's metadata until it finishes.
         if self.session and self.title.text().strip():
             self.session.rename(self.title.text())
             self.title.setText(self.session.title)

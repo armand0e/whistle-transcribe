@@ -9,7 +9,7 @@ import wave
 import contextlib
 import subprocess
 
-from model_catalog import BY_KEY, CACHE, ROOT, model_path, validate_choice, nemo_executable
+from model_catalog import BY_KEY, CACHE, ROOT, MODEL_REVISIONS, model_path, validate_choice, nemo_executable
 from process_control import NO_WINDOW
 
 os.environ['NEEDLE_TELEMETRY'] = '0'
@@ -42,14 +42,15 @@ def download(key):
             install()
         from huggingface_hub import hf_hub_download
         emit('status', text='Downloading Nemotron Q8 model…')
-        hf_hub_download(model.repo, 'nemotron-3.5-asr-streaming-0.6b.q8_0.gguf', cache_dir=str(CACHE))
+        hf_hub_download(model.repo, 'nemotron-3.5-asr-streaming-0.6b.q8_0.gguf',
+                        revision=MODEL_REVISIONS[key], cache_dir=str(CACHE))
         emit('ready', model=key)
         return
     if not model.repo:
-        raise RuntimeError('Whistle files are missing. Run setup_models.py first.')
+        raise RuntimeError('Whistle files are missing. Run scripts/setup_models.py first.')
     emit('status', text=f'Downloading {model.name} ({model.size})…')
     from huggingface_hub import snapshot_download
-    snapshot_download(model.repo, cache_dir=str(CACHE), max_workers=2,
+    snapshot_download(model.repo, revision=MODEL_REVISIONS[key], cache_dir=str(CACHE), max_workers=2,
                       allow_patterns=['config.json', 'preprocessor_config.json', 'model.bin', 'tokenizer.json', 'vocabulary.*'])
     if not model_path(key):
         raise RuntimeError('Model download is incomplete. Download again to resume.')

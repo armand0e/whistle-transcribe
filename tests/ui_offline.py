@@ -49,6 +49,11 @@ controller.open_library()
 controller.record()
 wait(lambda: pill.state == 'recording' and controller.job.recorded_seconds > 0.6)
 assert shelf.body.currentWidget() is shelf.live and shelf.list.count() == 2  # header + live session
+assert shelf.title.isReadOnly()
+live_title = shelf.session.title
+shelf.title.setText('Do not overwrite an active worker session')
+shelf.title.editingFinished.emit()
+assert shelf.title.text() == live_title
 shoot(pill, 'pill-recording')
 controller.pause()
 assert pill.dot.paused and controller.job.paused.is_set()
@@ -65,6 +70,7 @@ wait(lambda: pill.state == 'result', 60)
 assert pill.result_ok and pill.result_title.text() == 'Transcript Ready'
 session = shelf.session
 assert session and session.status == 'complete' and shelf.isVisible()
+assert not shelf.title.isReadOnly()
 assert len(shelf.view.paragraphs) == 3 and 'Vocabulary was Figma.' in shelf.view.toPlainText()
 assert shelf.player.isVisible() and not shelf.banner.isVisible()
 shoot(pill, 'pill-result')

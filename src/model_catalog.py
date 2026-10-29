@@ -2,8 +2,17 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from paths import ROOT
 CACHE = ROOT / 'models' / 'crosscheck-hub'
+
+# Immutable upstream snapshots for new downloads; existing caches stay usable.
+MODEL_REVISIONS = {
+    'whistle': '741118687e1f008f06d1351a402a731274789790',
+    'small_en': 'd1d751a5f8271d482d14ca55d9e2deeebbae577f',
+    'medium_en': 'a29b04bd15381511a9af671baec01072039215e3',
+    'large_v3': 'edaa852ec7e145841d8ffdb056a99866b5f0a478',
+    'nemotron35': 'ea30d66debe3740a08b573244286791d423d6b3e',
+}
 
 LANGUAGES = (
     (None, 'Detect automatically'), ('en', 'English'), ('de', 'German'), ('fr', 'French'),
@@ -36,17 +45,17 @@ MODELS = (
     Model('whistle', 'Whistle', 'Whistle', None, '17 MB', 'Lightweight', 'Fastest',
           'Tiny CPU model. Lecture tested; technical terminology was less reliable.', cpu_only=True, vocabulary=True),
     Model('small_en', 'Whisper Small.en', 'Small.en', 'Systran/faster-whisper-small.en',
-          '484 MB', 'Good', 'Fast', 'Balanced default. Recognized the key terms in your normal-speed clip.', True, 2500,
+          '484 MB', 'Good', 'Fast', 'Balanced default. Tested on a short biology lecture sample.', True, 2500,
           vocabulary=True),
     Model('phonon2', 'Phonon-2', 'Phonon-2', 'FermionResearch/Phonon-2',
           '164 MB', 'Promising', 'Very fast CPU', 'Lecture tested on CPU. Fast local option; some acronym errors remain. Windows CUDA is not supported by this integration.', True, 0, True),
     Model('nemotron35', 'Nemotron 3.5 ASR 0.6B', 'Nemotron', 'nvidia/nemotron-3.5-asr-streaming-0.6b',
           '742 MB Q8', 'Promising', 'Very fast GPU', 'Lecture tested with the official NVIDIA Q8_0 runtime. Fast CPU/CUDA option; some acronym errors remain.', False, 5000),
     Model('medium_en', 'Whisper Medium.en', 'Medium.en', 'Systran/faster-whisper-medium.en',
-          '1.53 GB', 'Higher expected', 'Slower', 'More capacity for English lectures. Not benchmarked on your recordings.', True, 5000,
+          '1.53 GB', 'Higher expected', 'Slower', 'More capacity for English lectures. Not benchmarked in the local sample comparison.', True, 5000,
           vocabulary=True),
     Model('large_v3', 'Whisper Large-v3', 'Large-v3', 'Systran/faster-whisper-large-v3',
-          '3.09 GB', 'Top Whisper', 'Slowest expected', 'Largest Whisper option; multilingual. Not benchmarked on your recordings.', False, 10000,
+          '3.09 GB', 'Top Whisper', 'Slowest expected', 'Largest Whisper option; multilingual. Not benchmarked in the local sample comparison.', False, 10000,
           vocabulary=True, languages=tuple(code for code, _ in LANGUAGES if code)),
 )
 BY_KEY = {model.key: model for model in MODELS}

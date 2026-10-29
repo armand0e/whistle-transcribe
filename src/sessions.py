@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import re
+import math
 import wave
 
 from transcriber import ROOT, add_segment, clock, render_document, segment_span, timestamp, write_atomic
@@ -26,8 +27,9 @@ class Session:
     @property
     def started(self):
         try:
-            return datetime.fromisoformat(self.metadata['started'])
-        except (KeyError, TypeError, ValueError):
+            value = datetime.fromisoformat(self.metadata['started'])
+            return value.astimezone()  # Normalize older naive timestamps before sorting with aware ones.
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
             return datetime.fromtimestamp(self.directory.stat().st_mtime).astimezone()
 
     @property
@@ -50,11 +52,15 @@ class Session:
 
     @property
     def duration(self):
-        if self.metadata.get('duration'):
-            return float(self.metadata['duration'])
-        inference = self.metadata.get('inference') or {}
-        if inference.get('duration'):
-            return float(inference['duration'])
+        inference = self.metadata.get('inference')
+        inference = inference if isinstance(inference, dict) else {}
+        for candidate in (self.metadata.get('duration'), inference.get('duration')):
+            try:
+                value = float(candidate)
+                if math.isfinite(value) and value >= 0:
+                    return value
+            except (TypeError, ValueError, OverflowError):
+                pass
         audio = self.audio_path
         if audio and audio.suffix.lower() == '.wav':
             try:
@@ -133,7 +139,13 @@ def load_session(directory):
         metadata = json.loads((directory / 'session.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return None
-    return Session(directory, metadata if isinstance(metadata, dict) else {})
+    if not isinstance(metadata, dict):
+        return None
+    for key in ('title', 'source', 'app', 'model', 'model_name', 'device', 'language',
+                'status', 'source_kind', 'source_audio', 'source_url'):
+        if key in metadata and not isinstance(metadata[key], str):
+            metadata.pop(key)
+    return Session(directory, metadata)
 
 def list_sessions(root=TRANSCRIPTS):
     root = Path(root)

@@ -5,12 +5,18 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import argparse
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'src'))
 from PySide6.QtCore import QCoreApplication, QTimer
 from capture_jobs import Recorder, HelperJob
 from windows_audio import Window
 from model_catalog import validate_choice
+
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--audio', type=Path, required=True, help='Existing PCM16 WAV to test without modifying it')
+args = parser.parse_args()
 
 application = QCoreApplication([])
 
@@ -37,7 +43,7 @@ assert bad.read_bytes() == b'not a WAV file'
 print('PASS: decoder failure is visible and preserves the input', flush=True)
 
 before = native_pids()
-source = ROOT / 'transcripts' / '2026-10-15_15-37-35-706694' / 'Audio.wav'
+source = args.audio.resolve()
 worker = Recorder(Window(0, 0, 'Cancelled Nemotron job', 'test'), 'en', ROOT / 'test-output' / 'failures',
                   'nemotron35', 'cpu', source_audio=source)
 errors = []

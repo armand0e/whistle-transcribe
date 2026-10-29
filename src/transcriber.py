@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 
-ROOT = Path(__file__).resolve().parent
+from paths import ROOT
 os.environ['NEEDLE_TELEMETRY'] = '0'
 os.environ['NEEDLE3_LIB_PATH'] = str(ROOT / 'models' / 'libneedle.dll')
 

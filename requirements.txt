@@ -8,3 +8,7 @@ av==19.0.2
 requests==2.34.2
 fermion-research==0.2.11
 yt-dlp[default]==2026.10.26
+# Patched installer/runtime dependencies for existing checkouts too.
+pip==26.2.2
+setuptools==84.2.1
+filelock==4.2.4

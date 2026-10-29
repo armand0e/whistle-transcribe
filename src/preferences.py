@@ -1,8 +1,10 @@
 """Remembered choices, stored beside the app in settings.json."""
 import json
 import os
+import math
+from pathlib import Path
 
-from model_catalog import BY_KEY, ROOT, validate_choice
+from model_catalog import BY_KEY, LANGUAGES, ROOT, validate_choice
 
 PATH = ROOT / 'settings.json'
 DEFAULTS = {
@@ -15,12 +17,32 @@ DEFAULTS = {
 class Preferences(dict):
     def __init__(self, path=None):
         super().__init__(DEFAULTS)
-        self.path = path or PATH
+        self.path = Path(path) if path else PATH
         try:
             stored = json.loads(self.path.read_text(encoding='utf-8'))
-            self.update({key: value for key, value in stored.items() if key in DEFAULTS})
+            for key, value in stored.items():
+                if key not in DEFAULTS:
+                    continue
+                default = DEFAULTS[key]
+                if isinstance(default, bool) and type(value) is not bool:
+                    continue
+                if isinstance(default, str) and not isinstance(value, str):
+                    continue
+                if key == 'language' and value is not None and not isinstance(value, str):
+                    continue
+                if key == 'pill_position' and value is not None:
+                    if (not isinstance(value, (list, tuple)) or len(value) != 2
+                            or any(type(n) not in (int, float) or not math.isfinite(n) or abs(n) > 1_000_000 for n in value)):
+                        continue
+                    value = [round(n) for n in value]
+                self[key] = value
         except (OSError, ValueError, AttributeError):
             pass
+        for key, choices in (('appearance', ('system', 'light', 'dark')),
+                             ('source_kind', ('window', 'system', 'mic')),
+                             ('language', tuple(code for code, _ in LANGUAGES))):
+            if self[key] not in choices:
+                self[key] = DEFAULTS[key]
         try:
             validate_choice(self['model'], self['device'], self['language'])
         except (ValueError, KeyError):

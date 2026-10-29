@@ -3,16 +3,24 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import argparse
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'src'))
 from PySide6.QtCore import QCoreApplication
 from capture_jobs import Recorder
 from windows_audio import Window
 
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--audio', type=Path, required=True, help='Existing PCM16 WAV to test without modifying it')
+parser.add_argument('--expect', action='append', default=[], help='Optional expected text fragment')
+parser.add_argument('--write-benchmarks', action='store_true', help='Explicitly replace models/benchmarks.json')
+args = parser.parse_args()
+
 application = QCoreApplication([])
-source = ROOT / 'transcripts' / '2026-10-15_15-53-15-462103' / 'Audio.wav'
+source = args.audio.resolve()
 original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
 results = {}
 for model, device in [('whistle', 'cpu'), ('small_en', 'cpu'), ('small_en', 'cuda'),
@@ -32,17 +40,17 @@ for model, device in [('whistle', 'cpu'), ('small_en', 'cpu'), ('small_en', 'cud
     assert document.metadata['status'] == 'complete', document.metadata
     assert document.metadata['model'] == model and document.metadata['device'] == device
     text = document.path.read_text(encoding='utf-8')
-    assert 'genome annotation pipeline' in text.lower(), text
-    assert 'coding sequence' in text.lower(), text
+    for phrase in args.expect:
+        assert phrase.casefold() in text.casefold(), text
     assert 'transcribing' in phases and 'recording' not in phases
     assert updates
     assert not (document.directory / 'Audio.wav').exists(), 'Saved-audio rerun should reference the original without copying it'
     results.setdefault(model, {})[device] = {'elapsed_seconds': round(elapsed, 2),
         'inference': document.metadata['inference'], 'transcript': str(document.path),
-        'source': str(source), 'audio_seconds': 56.14}
+        'source': str(source), 'audio_seconds': document.metadata['inference']['duration']}
     print(f'PASS {model}/{device}: {elapsed:.2f} s; {document.path}', flush=True)
 assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
-(ROOT / 'models' / 'benchmarks.json').write_text(json.dumps({
-    'note': 'One 56.14-second biology lecture clip. Elapsed includes process startup/model load. Not a verified quality ranking.',
+(ROOT / ('models' if args.write_benchmarks else 'test-output') / 'benchmarks.json').write_text(json.dumps({
+    'note': 'One user-supplied WAV clip. Elapsed includes process startup/model load. Not a verified quality ranking.',
     'source_sha256': original_hash, 'results': results}, indent=2), encoding='utf-8')
 print('PASS: six real model/device jobs; model metadata, document persistence, and original audio integrity verified')

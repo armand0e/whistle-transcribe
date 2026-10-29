@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parent
+from paths import ROOT
 EXPECTED_REMOTE = 'https://github.com/armand0e/whistle-transcribe.git'
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 

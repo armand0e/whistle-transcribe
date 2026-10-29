@@ -8,11 +8,13 @@ from pathlib import Path
 
 import numpy as np
 import soxr
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
 from transcriber import load_model, timestamp
 
-ROOT = Path(__file__).resolve().parent
-SOURCE = ROOT / 'transcripts' / '2026-10-15_15-37-35-706694'
-OUT = SOURCE / 'quality-comparison'
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = None
+OUT = None
 # Lecture-informed development vocabulary, fixed before generating variants.
 # Broad terminology plus tools named in the existing draft; not a held-out test.
 GLOSSARY = [
@@ -30,10 +32,12 @@ GLOSSARY = [
 
 def load_audio():
     with wave.open(str(SOURCE / 'Audio.wav')) as audio:
-        assert audio.getsampwidth() == 2 and audio.getnchannels() == 2
+        if audio.getsampwidth() != 2:
+            raise ValueError('Choose a PCM16 WAV recording.')
+        channels = audio.getnchannels()
         rate = audio.getframerate()
         raw = audio.readframes(audio.getnframes())
-    mono = np.frombuffer(raw, dtype='<i2').reshape(-1, 2).mean(axis=1).astype(np.float32) / 32768
+    mono = np.frombuffer(raw, dtype='<i2').reshape(-1, channels).mean(axis=1).astype(np.float32) / 32768
     return mono, rate
 
 def stream_chunks(mono, rate):
@@ -77,7 +81,7 @@ def main():
     global SOURCE, OUT
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['all', 'stream', 'long'], default='all')
-    parser.add_argument('--source', type=Path, default=SOURCE)
+    parser.add_argument('--source', type=Path, required=True, help='Saved session directory containing Audio.wav')
     args = parser.parse_args()
     SOURCE = args.source.resolve()
     OUT = SOURCE / 'quality-comparison'

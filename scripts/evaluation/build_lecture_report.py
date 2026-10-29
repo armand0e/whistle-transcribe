@@ -35,7 +35,7 @@ def extract(results, start=0, end=1e6, mode='stream'):
 def main():
     global SOURCE, OUT
     parser = argparse.ArgumentParser()
-    parser.add_argument('--source', type=Path, default=SOURCE)
+    parser.add_argument('--source', type=Path, required=True, help='Saved session directory containing Audio.wav')
     parser.add_argument('--score-from', type=float, default=7)
     args = parser.parse_args()
     SOURCE = args.source.resolve()

@@ -1,0 +1,10 @@
+# Use production pins without installing model backends in CI.
+-c requirements.txt
+PySide6
+numpy
+soxr
+av
+yt-dlp[default]
+pip
+setuptools
+filelock

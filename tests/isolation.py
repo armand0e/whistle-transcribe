@@ -2,10 +2,14 @@
 from pathlib import Path
 import subprocess
 import sys
+import argparse
 import time
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--audio', type=Path, required=True, help='Speech WAV to play for the capture test')
+args = parser.parse_args()
 # Target stays silent. The separate player is deliberately outside its tree.
 target = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
 capture = subprocess.Popen([str(ROOT / 'bin' / 'capture.exe'), str(target.pid)],
@@ -13,7 +17,7 @@ capture = subprocess.Popen([str(ROOT / 'bin' / 'capture.exe'), str(target.pid)],
 try:
     assert capture.stderr.readline().strip() == b'READY'
     player = subprocess.Popen([sys.executable, str(ROOT / 'tests' / 'play_audio.py'),
-                               str(ROOT / 'test-output' / 'speech.wav')],
+                               str(args.audio.resolve())],
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     player.stdout.readline()
     player.stdin.write('go\n'); player.stdin.flush()

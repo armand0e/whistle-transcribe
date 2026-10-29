@@ -1,6 +1,6 @@
 # Whistle
 
-**Record anything you hear on your PC and get a searchable, playable transcript. Everything runs locally.**
+**Record anything you hear on your PC and get a searchable, playable transcript. Speech recognition runs locally on your PC.**
 
 Whistle has two parts. The **pill** is a small capsule that floats above your windows; it starts and stops recordings. The **library** is where every transcript lives: you can search it, play it back, edit it, and export it.
 
@@ -78,12 +78,12 @@ Requires x64 Windows build 20348+, Python 3.12, and Visual Studio or Build Tools
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe setup_models.py
+.\.venv\Scripts\python.exe scripts\setup_models.py
 .\build-capture.cmd
-.\.venv\Scripts\python.exe app.py
+.\.venv\Scripts\python.exe src\app.py
 ```
 
-`build-capture.cmd` finds Visual Studio with `vswhere`, so you don't need to edit any paths. To launch, double-click **Launch Whistle.vbs** or **Launch Whistle.cmd**, or run `create-shortcut.ps1` to add desktop and Start-menu shortcuts (search **Whistle** in Windows). Both shortcuts point to this checkout. Launching a second time brings the running copy forward.
+`build-capture.cmd` finds Visual Studio with `vswhere`, so you don't need to edit any paths. To launch, double-click **Launch Whistle.vbs** or **Launch Whistle.cmd**, or run `scripts/create-shortcut.ps1` to add desktop and Start-menu shortcuts (search **Whistle** in Windows). Both shortcuts point to this checkout. Launching a second time brings the running copy forward.
 
 ### Automatic updates
 
@@ -93,7 +93,7 @@ The launcher checks this repository's GitHub `main` branch on each full start an
 
 Updates require Git and the initial setup above. They apply only to a clean checkout of `main` with the expected GitHub origin and fast-forward history. Local edits, untracked source files, development branches, and local commits are preserved by skipping the update. Models, recordings, transcripts, settings, and the virtual environment are never replaced by Git updates. If GitHub cannot be reached, Whistle opens the installed copy. A failed dependency install or capture build shows an error and retries on the next launch; the prior capture executable is kept until a replacement builds successfully.
 
-**Settings › General › Updates** shows the last result and opens `.updates/update.log`. Starting `app.py` directly bypasses the updater; after a manual pull, install changed requirements and rebuild the helper yourself.
+**Settings › General › Updates** shows the last result and opens `.updates/update.log`. Starting `src/app.py` directly bypasses the updater; after a manual pull, install changed requirements and rebuild the helper yourself.
 
 Whisper on CUDA needs an NVIDIA driver, CUDA 12 cuBLAS, and cuDNN 9 DLLs. The isolated worker searches installed CUDA toolkits and PyTorch runtime DLL directories. Settings shows the GPU name and free VRAM, or what is missing. Before loading a model, inference checks free dedicated VRAM against a conservative reserve. GPU workers exit after each transcription to release memory. Nemotron uses official NeMo-Speech.cpp 0.2.0 Windows CPU/CUDA binaries, verified against the release SHA-256 checksums.
 
@@ -111,33 +111,39 @@ It drives the real recorder, worker protocol, library, settings, and app control
 
 These Windows checks need real hardware:
 
-- `tests/integration.py`: real app audio → WAV → final pass → saved document.
+- `tests/integration.py --audio path/to/speech.wav`: real app audio → WAV → final pass → saved document.
 - `tests/idle.py`: a silent app.
-- `tests/isolation.py`: unrelated apps are excluded.
-- `tests/models_integration.py`: six real model/device jobs; writes `models/benchmarks.json`.
-- `tests/job_failures.py`: decoder errors, cancellation, and native child cleanup.
+- `tests/isolation.py --audio path/to/speech.wav`: unrelated apps are excluded.
+- `tests/models_integration.py --audio path/to/speech.wav`: six real model/device jobs; writes `test-output/benchmarks.json`. Updating the model picker timings requires explicit `--write-benchmarks`.
+- `tests/job_failures.py --audio path/to/speech.wav`: decoder errors, cancellation, and native child cleanup (Nemotron CPU must be installed).
 - `tests/ui_smoke.py`: live window list, app icons and names, and the real CUDA check.
 
-These prove the tested paths ran and saved transcripts. They do not establish perfect transcription or a general quality leaderboard. Earlier comparisons are in `transcripts/Quality Test Results.txt`.
+These prove the tested paths ran and saved transcripts. They do not establish perfect transcription or a general quality leaderboard. Historical hardware evidence and its limits are in [docs/windows-validation.md](docs/windows-validation.md). Audio and comparison outputs are intentionally not distributed.
 
-## Code map
+## Repository layout
 
-| File | Role |
-|---|---|
-| `app.py` | Controller: pill, library, tray, shortcut, single instance, jobs |
-| `launch.py`, `auto_update.py` | Startup progress window, GitHub updates, dependency and capture preparation |
-| `url_dialog.py`, `url_import.py` | URL input, single-video download, metadata, and progress |
-| `pill.py` | The capture capsule and its animated states |
-| `library.py` | Library window: list, reader, editor, player, find, export |
-| `source_picker.py`, `settings_dialog.py`, `model_picker.py`, `welcome.py` | Dialogs |
-| `theme.py`, `widgets.py` | Colors, type, stylesheet, vector icons, switches, segmented controls, meters |
-| `capture_jobs.py` | Recording, live mixing, pause, conversion, and worker orchestration |
-| `asr_worker.py` | Isolated model process: download, convert, transcribe, GPU probe |
-| `sessions.py`, `transcriber.py` | Session files, paragraphs, edits, exports |
-| `native/capture.cpp` | App, system, and microphone capture for Windows |
+```text
+src/                 Application, UI, audio/model workers, updater
+scripts/             Model setup and Windows shortcut installation
+  evaluation/        Optional comparison tools (bring your own saved session)
+native/              Windows process-loopback/system/microphone capture helper
+tests/               Offline regression suite and opt-in hardware checks
+docs/                Screenshots, architecture, validation and audit notes
+.github/workflows/   Windows/Linux CI
+```
+
+The small root `app.py` and `launch.py` are compatibility entry points for existing shortcuts and older auto-updaters. Actual application code lives in `src/`. `Launch Whistle.vbs` and `.cmd` remain at the root so installed shortcuts continue working. The root build script stays compatible with existing updater staging.
+
+Downloaded `models/`, generated `bin/`, saved `transcripts/`, `settings.json`, `.venv/`, and `.updates/` stay at the checkout root and are ignored by Git. Moving the source does not relocate your data. Paths are resolved from the source location, so launching from another working directory works.
+
+See [architecture](docs/architecture.md), [contributing](CONTRIBUTING.md), and the [public-release audit](docs/public-release-audit.md).
 
 ## Sources and notices
 
 [Whistle](https://huggingface.co/Cactus-Compute/whistle), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Nemotron 3.5](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b), [NVIDIA native runtime](https://github.com/NVIDIA/NeMo-Speech.cpp), [Phonon-2](https://huggingface.co/FermionResearch/Phonon-2), [Phonon runtime](https://github.com/fermionresearch/phonon), [PyAV](https://github.com/PyAV-Org/PyAV), [Microsoft process-loopback documentation](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/).
 
 Phonon-2 derives from NVIDIA Parakeet TDT 0.6B v3; its weights are CC-BY-4.0 and its CLI/runtime is Apache-2.0. Notices are retained in downloaded packages. Nemotron model terms are linked from its card; its native runtime is Apache-2.0. Keep this folder in place so the desktop shortcut continues to work.
+
+## License
+
+Application code is licensed under [MIT](LICENSE). Downloaded models, native runtimes, and Python dependencies have their own licenses and are not relicensed by this repository. See [third-party notices](THIRD_PARTY_NOTICES.md) and [security information](SECURITY.md).

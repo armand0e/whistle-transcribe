@@ -14,6 +14,7 @@ from PySide6.QtCore import QThread, Signal
 from model_catalog import BY_KEY, ROOT, model_path, validate_choice
 from transcriber import Transcript
 from process_control import NO_WINDOW, terminate_tree
+from paths import SRC
 
 RATE, FRAME = 44100, 4  # Native capture: 44.1 kHz stereo PCM16.
 MAX_SKEW = RATE * FRAME // 2  # Pad a stalled source after half a second.
@@ -23,7 +24,7 @@ def helper_command(arguments):
     executable = Path(sys.executable)
     if sys.platform == 'win32':
         executable = executable.with_name('python.exe')  # pythonw has no stdout pipe.
-    return [str(executable), '-u', str(ROOT / 'asr_worker.py'), *arguments]
+    return [str(executable), '-u', str(SRC / 'asr_worker.py'), *arguments]
 
 def capture_commands(source, include_mic=False):
     """One native capture process per stream; streams are mixed while recording."""

@@ -91,6 +91,34 @@ assert preferences['language'] == 'en', 'English-only models force English'
 assert Preferences(folder / 'settings.json')['model'] == 'small_en'
 print('PASS: model/device/language rules and preference recovery', flush=True)
 
+# Invalid JSON types must not turn a hand-edited or damaged settings file into
+# an unlaunchable app. Valid unrelated preferences should still survive.
+broken_settings = folder / 'broken-settings.json'
+broken_settings.write_text(json.dumps({'model': [], 'language': {}, 'pill_position': [100],
+                                      'vocabulary': ['not text'], 'hotkey': 'false',
+                                      'appearance': 'unknown', 'source_kind': 'unknown',
+                                      'notify_when_done': False}), encoding='utf-8')
+recovered = Preferences(broken_settings)
+assert recovered['model'] == 'small_en' and recovered['language'] == 'en'
+assert recovered['pill_position'] is None and recovered['vocabulary'] == ''
+assert recovered['hotkey'] is True and recovered['appearance'] == 'system'
+assert recovered['source_kind'] == 'window' and recovered['notify_when_done'] is False
+broken_settings.write_text(json.dumps({'pill_position': [float('nan'), 200]}))
+assert Preferences(broken_settings)['pill_position'] is None
+print('PASS: malformed settings recover safely without discarding unrelated valid preferences', flush=True)
+
+mixed = folder / 'mixed-dates'
+for name, payload in [('old', {'started': '2026-10-26T12:00:00', 'duration': 'invalid', 'inference': []}),
+                      ('new', {'started': '2026-10-27T12:00:00+00:00', 'duration': float('nan')}),
+                      ('damaged', ['not metadata'])]:
+    target = mixed / name
+    target.mkdir(parents=True)
+    (target / 'session.json').write_text(json.dumps(payload), encoding='utf-8')
+loaded = list_sessions(mixed)
+assert len(loaded) == 2 and loaded[0].directory.name == 'new'
+assert all(item.duration is None for item in loaded)
+print('PASS: mixed naive/aware timestamps and invalid durations do not crash the library', flush=True)
+
 if sys.platform == 'win32':
     target = folder / 'sharing.json'
     target.write_text('original')
