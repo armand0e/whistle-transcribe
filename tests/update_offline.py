@@ -121,6 +121,18 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.root / 'app.py').read_text(), '# my unfinished changes\n')
         self.assertEqual(self.steps, [])
 
+    def test_changed_shared_constraints_trigger_dependency_install(self):
+        self.publish({'requirements.txt': '-c requirements/constraints.txt\nexample\n',
+                      'requirements/constraints.txt': 'example==1\n'})
+        self.assertTrue(self.service.run().launch)
+        self.steps.clear()
+        self.publish({'requirements/constraints.txt': 'example==2\n'})
+        self.assertTrue(self.service.run().launch)
+        self.assertEqual(self.steps, ['dependencies'])
+        self.steps.clear()
+        self.assertEqual(self.service.run().status, 'current')
+        self.assertEqual(self.steps, [])
+
     def test_untracked_files_are_preserved(self):
         self.publish({'new.py': '# upstream\n'})
         (self.root / 'new.py').write_text('# my new file\n')

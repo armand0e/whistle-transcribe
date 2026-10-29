@@ -126,6 +126,7 @@ These prove the tested paths ran and saved transcripts. They do not establish pe
 src/                 Application, UI, audio/model workers, updater
 scripts/             Model setup and Windows shortcut installation
   evaluation/        Optional comparison tools (bring your own saved session)
+requirements/        Shared dependency version constraints
 native/              Windows process-loopback/system/microphone capture helper
 tests/               Offline regression suite and opt-in hardware checks
 docs/                Screenshots, architecture, validation and audit notes

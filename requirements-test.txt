@@ -1,5 +1,5 @@
 # Use production pins without installing model backends in CI.
--c requirements.txt
+-c requirements/constraints.txt
 PySide6
 numpy
 soxr

@@ -166,7 +166,12 @@ class Updater:
         return Outcome(status, message, launch)
 
     def requirements_hash(self):
-        return hashlib.sha256((self.root / 'requirements.txt').read_bytes()).hexdigest()
+        digest = hashlib.sha256()
+        paths = [self.root / 'requirements.txt', *sorted((self.root / 'requirements').rglob('*.txt'))]
+        for path in paths:
+            digest.update(path.relative_to(self.root).as_posix().encode('utf-8'))
+            digest.update(path.read_bytes())
+        return digest.hexdigest()
 
     def capture_hash(self):
         digest = hashlib.sha256((self.root / 'build-capture.cmd').read_bytes())

@@ -8,6 +8,7 @@ This review covers the source-layout migration, repository hygiene, startup/impo
 - Shared source/data paths live in `src/paths.py`. Models, recordings, transcripts, settings, environments, and generated native files retain their existing locations.
 - Root `app.py` and `launch.py` remain small compatibility shims. An isolated real-Git test loaded the actual pre-migration `d967215` updater/launcher, pulled a source-layout change, and successfully opened the new entry point. Installer/build steps in that migration fixture were stand-ins; the actual environment was also installed and audited separately.
 - Evaluation and hardware scripts now require explicit sample inputs rather than assuming personal lecture directories. Benchmarks write to test output unless replacing model-picker timings is explicitly requested.
+- Runtime and test declarations share plain version constraints in `requirements/constraints.txt`. CI exposed and prompted correction of an initial extras/constraints packaging error; pip validates both declaration files, and a Git updater regression checks constraint-only dependency changes.
 - Added MIT licensing, third-party notices, contributor guidance, and security/architecture documentation. Python test requirements reuse production constraints. CI has read-only repository permissions and updated checkout/setup actions.
 
 ## Bugs fixed
