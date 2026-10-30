@@ -1,5 +1,7 @@
 # Public-release review — October 29, 2026
 
+This is the historical source-release audit for `414d389`. The Windows installer and release-based updater were added afterward; see `windows-release.md` for their validation and current deployment behavior.
+
 This review covers the source-layout migration, repository hygiene, startup/import flows, transcript persistence, and automated checks. It is a bounded engineering review, not a security certification or a claim of perfect transcription.
 
 ## Structure and compatibility

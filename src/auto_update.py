@@ -1,4 +1,8 @@
-"""Conservative launch-time Git updater. Standard library only: never load Qt here."""
+"""Developer-only Git updater and shared stdlib update locks/logging.
+
+The normal launcher uses release_update.ReleaseUpdater. This Git workflow is
+available only through the explicit source-only --dev-update option.
+"""
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
@@ -116,6 +120,7 @@ class Outcome:
     status: str
     message: str
     launch: bool = True
+    installer: str | None = None
 
 class Updater:
     def __init__(self, root=ROOT, progress=None, expected_remote=EXPECTED_REMOTE, running=None):

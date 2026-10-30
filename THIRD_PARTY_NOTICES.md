@@ -1,10 +1,13 @@
 # Third-party notices
 
-The MIT license in this repository covers application code. It does not replace licenses for installed Python packages, model weights, or downloaded native runtimes. These artifacts are not committed or redistributed in this repository. Review upstream terms before redistributing them yourself.
+The MIT license in this repository covers application code. It does not replace licenses for installed Python packages, model weights, or downloaded native runtimes. Model weights and the separately fetched Cactus/NVIDIA engines are not committed or included in the installer. Windows releases bundle Python/runtime dependencies (including Phonon's CPU engine) and Node; their license/metadata files are retained in the installed payload. Review upstream terms before redistributing them yourself.
 
 | Component | Upstream terms |
 |---|---|
 | Python | [Python license](https://docs.python.org/3/license.html) |
+| Frozen executable | [PyInstaller license and bootloader exception](https://pyinstaller.org/en/stable/license.html) |
+| Bundled YouTube JavaScript runtime | [Node.js license](https://github.com/nodejs/node/blob/v24.22.2/LICENSE) |
+| Phonon CPU dependencies | [PyTorch](https://github.com/pytorch/pytorch), [Transformers](https://github.com/huggingface/transformers) |
 | PySide6 / Qt | [Qt for Python licensing](https://doc.qt.io/qtforpython-6/licenses.html) |
 | Cactus Whistle model | [Model card and Apache 2.0 license](https://huggingface.co/Cactus-Compute/whistle) |
 | Cactus runtime | [cactus-needle package](https://pypi.org/project/cactus-needle/) |

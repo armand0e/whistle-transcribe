@@ -6,18 +6,39 @@ import subprocess
 import sys
 import threading
 
-from auto_update import NO_WINDOW, ROOT, Updater
-from paths import SRC
+from auto_update import NO_WINDOW, ROOT
+from release_update import ReleaseUpdater as Updater, start_install
+from paths import SRC, FROZEN, CONFIG_DIR, installed_executable
 
 def open_app():
+    executable = installed_executable()
+    if executable:
+        if not FROZEN and not (CONFIG_DIR / 'bootstrap.json').exists():
+            from auto_update import atomic_json
+            atomic_json(CONFIG_DIR / 'bootstrap.json', {'data_dir': str(ROOT)})
+        subprocess.Popen([str(executable), '--app'], cwd=executable.parent, creationflags=NO_WINDOW)
+        return
     if not (SRC / 'app.py').is_file():
         raise RuntimeError('The app entry point is missing. Check the update log or restore src/app.py.')
     python = ROOT / '.venv' / ('Scripts/pythonw.exe' if sys.platform == 'win32' else 'bin/python')
     subprocess.Popen([str(python), str(SRC / 'app.py')], cwd=ROOT, creationflags=NO_WINDOW)
 
 def main():
+    if '--skip-update' in sys.argv:
+        open_app()
+        return 0
+    if '--dev-update' in sys.argv and not FROZEN:
+        from auto_update import Updater as GitUpdater
+        outcome = GitUpdater(progress=lambda message: None).run()
+        if outcome.launch:
+            open_app()
+        return 0 if outcome.launch else 1
     if '--no-gui' in sys.argv:
         outcome = Updater(progress=lambda text: print(text, flush=True)).run()
+        if outcome.installer:
+            if not start_install(outcome.installer):
+                open_app()
+            return 0
         if outcome.launch:
             open_app()
         return 0 if outcome.launch else 1
@@ -29,6 +50,10 @@ def main():
         window = tk.Tk()
     except Exception:
         outcome = Updater().run()
+        if outcome.installer:
+            if not start_install(outcome.installer):
+                open_app()
+            return 0
         if outcome.launch:
             open_app()
             return 0
@@ -58,7 +83,7 @@ def main():
         except Exception as exc:
             events.put(('error', str(exc)))
     worker = threading.Thread(target=work, daemon=False)
-    window.protocol('WM_DELETE_WINDOW', window.withdraw)  # Do not interrupt pip/build mid-write.
+    window.protocol('WM_DELETE_WINDOW', window.withdraw)
     failed = [False]
     def finish_error(message):
         failed[0] = True
@@ -81,7 +106,14 @@ def main():
                 if kind == 'message':
                     text.set(value)
                 elif kind == 'done':
-                    if value.launch:
+                    if value.installer:
+                        try:
+                            if not start_install(value.installer):
+                                open_app()
+                            window.destroy()  # Setup waits for this process before replacing files.
+                        except (OSError, ValueError) as exc:
+                            finish_error('The update could not start: ' + str(exc))
+                    elif value.launch:
                         try:
                             open_app()
                             window.destroy()

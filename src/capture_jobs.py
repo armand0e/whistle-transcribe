@@ -14,13 +14,15 @@ from PySide6.QtCore import QThread, Signal
 from model_catalog import BY_KEY, ROOT, model_path, validate_choice
 from transcriber import Transcript
 from process_control import NO_WINDOW, terminate_tree
-from paths import SRC
+from paths import SRC, APP_DIR, BIN, FROZEN
 
 RATE, FRAME = 44100, 4  # Native capture: 44.1 kHz stereo PCM16.
 MAX_SKEW = RATE * FRAME // 2  # Pad a stalled source after half a second.
-CAPTURE_EXE = ROOT / 'bin' / 'capture.exe'
+CAPTURE_EXE = BIN / 'capture.exe'
 
 def helper_command(arguments):
+    if FROZEN:
+        return [str(APP_DIR / 'WhistleWorker.exe'), *arguments]
     executable = Path(sys.executable)
     if sys.platform == 'win32':
         executable = executable.with_name('python.exe')  # pythonw has no stdout pipe.

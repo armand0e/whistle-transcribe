@@ -19,4 +19,4 @@ Add regression coverage for behavior changes. Stand-in capture/model tests verif
 
 Never commit recordings, transcripts, settings, logs, environments, downloaded model weights, or secrets. Screenshots should use demonstration content. Do not include user audio or private URLs in issues or pull requests. New model/runtime downloads should use immutable revisions/checksums and retain upstream terms.
 
-The launcher auto-updates only clean `main` checkouts. Use a feature branch while developing and start `src/app.py` directly to bypass update checks.
+The launcher updates from published stable GitHub Releases, not source commits. Start `src/app.py` directly while developing to bypass release checks. The old clean-checkout Git updater is opt-in with `src/launch.py --dev-update`. To publish, update `src/version.py`, push a matching stable version tag, and let the release workflow build/test before publishing assets.

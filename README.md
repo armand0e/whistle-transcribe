@@ -8,6 +8,14 @@ Whistle has two parts. The **pill** is a small capsule that floats above your wi
 
 ![The library](docs/screenshots/library-light.png)
 
+## Download for Windows
+
+**[Download the latest Windows installer](https://github.com/armand0e/whistle-transcribe/releases/latest)** — choose the `Whistle-Setup-<version>-x64.exe` asset.
+
+Requires x64 Windows 11 or Windows Server 2022+ (build 20348+). Run the per-user installer; no Python, Git, Node, administrator rights, or C++ build tools are required. Models download on demand from Settings. The CPU runtimes and YouTube JavaScript runtime are included. NVIDIA acceleration still requires a compatible driver and the CUDA/cuDNN libraries described below.
+
+New installations save data under `%LOCALAPPDATA%\Whistle`; program files live under `%LOCALAPPDATA%\Programs\Whistle`. Existing source-install shortcuts are recognized so their data and model caches can be reused without moving/deleting them. Uninstall keeps data. The installer is unsigned; Windows may display an unknown-publisher warning. `SHA256SUMS.txt` accompanies each release.
+
 ## What it does
 
 - **Record any source.** Choose one app (Zoom, Teams, a browser, a video player), **all system audio**, or **your microphone**. Turn on *Include my microphone* to mix your own voice into a call recording.
@@ -61,7 +69,7 @@ Each recording or import creates `transcripts/<date-and-time>/`:
 
 Recordings stay until you delete them; deleting moves the folder to the Recycle Bin.
 
-URL imports use [yt-dlp](https://github.com/yt-dlp/yt-dlp), which supports YouTube and many other video sites, plus direct audio/video links. Support depends on the site; private, paid, DRM-protected, login-required, and live videos may not work. Import a downloaded file when a site blocks access. YouTube extraction needs a supported JavaScript runtime: Whistle automatically enables installed **Node.js 22+** or **Deno 2.3+**, along with the solver scripts installed by `yt-dlp[default]`. No separate ffmpeg executable is needed for ordinary single-stream downloads; the existing audio decoder handles conversion. Site access uses your network connection; speech recognition remains local. Source URLs and video titles are stored in `session.json`, and the downloaded media is removed only after the session's `Audio.wav` is ready.
+URL imports use [yt-dlp](https://github.com/yt-dlp/yt-dlp), which supports YouTube and many other video sites, plus direct audio/video links. Support depends on the site; private, paid, DRM-protected, login-required, and live videos may not work. Import a downloaded file when a site blocks access. YouTube extraction needs a supported JavaScript runtime: The installer includes Node; source checkouts automatically enable installed **Node.js 22+** or **Deno 2.3+**, along with the solver scripts installed by `yt-dlp[default]`. No separate ffmpeg executable is needed for ordinary single-stream downloads; the existing audio decoder handles conversion. Site access uses your network connection; speech recognition remains local. Source URLs and video titles are stored in `session.json`, and the downloaded media is removed only after the session's `Audio.wav` is ready.
 
 ## Capture scope
 
@@ -71,7 +79,7 @@ URL imports use [yt-dlp](https://github.com/yt-dlp/yt-dlp), which supports YouTu
 
 Stalled sources (for example, an app that is silent) are filled with silence in real time, so timestamps match the wall clock and mixed streams stay aligned. Protected audio, and audio rendered by an unrelated service, may not be capturable.
 
-## Setup
+## Build from source
 
 Requires x64 Windows build 20348+, Python 3.12, and Visual Studio or Build Tools with the *Desktop development with C++* workload.
 
@@ -87,13 +95,11 @@ python -m venv .venv
 
 ### Automatic updates
 
-The launcher checks this repository's GitHub `main` branch on each full start and applies merged changes automatically. It uses your existing Git credentials, updates Python dependencies when `requirements.txt` changes, and rebuilds the capture helper when its source or build script changes. The first launch through the new updater prepares these once. A small progress window shows what is happening.
+At each full start, the launcher checks the **latest published stable GitHub Release**, compares its `vMAJOR.MINOR.PATCH` tag with the installed version, and skips equal/older versions. Drafts and prereleases are ignored. A newer Windows installer is downloaded and verified against both the release SHA-256 manifest and GitHub's asset digest (when available), then Setup waits for the launcher to exit before replacing program files. Data stays outside the installation directory.
 
-**Quit Whistle from its tray menu, then reopen it from Windows Search** to pick up a newly merged PR. Opening the shortcut while Whistle is already running just brings it forward; recording and transcription are not interrupted. Closing the library alone leaves Whistle running in the tray.
+Quit Whistle from the tray and reopen it to check. Opening a running copy brings it forward and defers installation so a recording or transcription is not interrupted. If GitHub is unavailable, the installed app opens normally. Last-check details and the update log are in **Settings › General › Updates**.
 
-Updates require Git and the initial setup above. They apply only to a clean checkout of `main` with the expected GitHub origin and fast-forward history. Local edits, untracked source files, development branches, and local commits are preserved by skipping the update. Models, recordings, transcripts, settings, and the virtual environment are never replaced by Git updates. If GitHub cannot be reached, Whistle opens the installed copy. A failed dependency install or capture build shows an error and retries on the next launch; the prior capture executable is kept until a replacement builds successfully.
-
-**Settings › General › Updates** shows the last result and opens `.updates/update.log`. Starting `src/app.py` directly bypasses the updater; after a manual pull, install changed requirements and rebuild the helper yourself.
+**Merging a PR alone does not update installed users.** Maintainers must publish a tested release tag. There is no automatic Git pull or pip install in the release updater. Source developers can start `src/app.py` directly, or explicitly use `src/launch.py --dev-update` for the old clean-checkout Git workflow.
 
 Whisper on CUDA needs an NVIDIA driver, CUDA 12 cuBLAS, and cuDNN 9 DLLs. The isolated worker searches installed CUDA toolkits and PyTorch runtime DLL directories. Settings shows the GPU name and free VRAM, or what is missing. Before loading a model, inference checks free dedicated VRAM against a conservative reserve. GPU workers exit after each transcription to release memory. Nemotron uses official NeMo-Speech.cpp 0.2.0 Windows CPU/CUDA binaries, verified against the release SHA-256 checksums.
 
@@ -148,3 +154,9 @@ Phonon-2 derives from NVIDIA Parakeet TDT 0.6B v3; its weights are CC-BY-4.0 and
 ## License
 
 Application code is licensed under [MIT](LICENSE). Downloaded models, native runtimes, and Python dependencies have their own licenses and are not relicensed by this repository. See [third-party notices](THIRD_PARTY_NOTICES.md) and [security information](SECURITY.md).
+
+## Building and publishing Windows releases
+
+Install `requirements/release.txt` in a Windows x64 build environment, compile the capture helper, and run `python scripts/release/build.py --iscc path/to/ISCC.exe`. Then run `python scripts/release/verify_installer.py dist/Whistle-Setup-<version>-x64.exe` for isolated install/upgrade/uninstall checks. Build output is ignored by Git and never includes personal models, recordings, settings, or transcripts.
+
+Set `src/version.py`, commit the change, and push the matching stable `vMAJOR.MINOR.PATCH` tag. The Windows release workflow runs regressions, builds the frozen app/worker and installer, verifies installation and data preservation, uploads artifacts, and publishes the installer plus checksums in GitHub Releases. Manual workflow dispatch builds downloadable CI artifacts without publishing a release. See [release validation](docs/windows-release.md).

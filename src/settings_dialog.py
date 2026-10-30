@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QPlainTextEdit, QPushButton, 
 
 import theme
 from auto_update import ROOT, update_status
+from version import VERSION
 from model_catalog import BY_KEY, LANGUAGES, supports_language
 from model_picker import ModelList
 from sessions import TRANSCRIPTS
@@ -116,13 +117,13 @@ class SettingsWindow(QDialog):
         log.setEnabled(log_path.is_file())
         log.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path))))
         status = update_status()
-        detail = status.get('message', 'Checks GitHub main automatically when launched from your Whistle shortcut.')
+        detail = 'Version ' + VERSION + '\n' + status.get('message', 'Checks the latest stable GitHub Release when launched.')
         if status.get('checked'):
             detail += '\nLast check: ' + status['checked']
         card.add_row('Automatic updates', log, detail)
         self._section(layout, 'UPDATES', card,
-                      'To install newly merged changes, quit Whistle from the tray, then reopen it. '
-                      'Updates wait while the app is running.')
+                      'Updates install published stable releases, not individual commits. '
+                      'Quit Whistle from the tray, then reopen it to check. Saved data stays in place.')
         layout.addStretch()
         return page
 

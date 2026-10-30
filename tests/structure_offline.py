@@ -20,10 +20,12 @@ assert paths.ROOT == ROOT == model_catalog.ROOT == auto_update.ROOT == transcrib
 assert preferences.PATH == ROOT / 'settings.json'
 command = capture_jobs.helper_command(['convert'])
 assert Path(command[2]) == ROOT / 'src' / 'asr_worker.py'
-with patch('launch.subprocess.Popen') as spawn:
+with patch('launch.subprocess.Popen') as spawn, patch('launch.installed_executable', return_value=None):
     launch.open_app()
     assert Path(spawn.call_args.args[0][1]) == ROOT / 'src' / 'app.py'
     assert spawn.call_args.kwargs['cwd'] == ROOT
+with patch('capture_jobs.FROZEN', True), patch('capture_jobs.APP_DIR', ROOT / 'fixture-bundle'):
+    assert capture_jobs.helper_command(['probe']) == [str(ROOT / 'fixture-bundle' / 'WhistleWorker.exe'), 'probe']
 
 # The pre-migration launcher opens ROOT/app.py after pulling new code, while
 # preexisting shortcuts can still point at ROOT/launch.py. Both must route to src.

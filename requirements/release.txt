@@ -1,0 +1,9 @@
+-r ../requirements.txt
+pyinstaller==6.22.3
+# CPU Phonon runtime dependencies; no system Python or compiler needed at runtime.
+torch==2.14.1
+transformers==5.20.0
+soundfile==0.14.0
+scipy==1.18.1
+safetensors==0.8.0
+zstandard==0.25.0

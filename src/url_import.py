@@ -4,6 +4,7 @@ import shutil
 import sys
 import time
 from urllib.parse import urlsplit
+from paths import BIN
 
 
 def validate_url(value):
@@ -61,6 +62,8 @@ def download(url, directory, emit):
                'windowsfilenames': True, 'overwrites': False}
     # yt-dlp enables Deno by default; explicitly enable installed Node too for YouTube.
     runtimes = {name: {'path': path} for name in ('deno', 'node') if (path := shutil.which(name))}
+    if (BIN / 'node.exe').is_file():
+        runtimes['node'] = {'path': str(BIN / 'node.exe')}
     if runtimes:
         options['js_runtimes'] = runtimes
     emit('status', text='Looking up video…')

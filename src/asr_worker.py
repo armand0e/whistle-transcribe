@@ -26,6 +26,13 @@ def download(key):
         emit('ready', model=key)
         return
     model = BY_KEY[key]
+    if key == 'whistle':
+        from setup_whistle import install
+        emit('status', text='Downloading Whistle model and CPU runtime…')
+        with contextlib.redirect_stdout(sys.stderr):
+            install()
+        emit('ready', model=key)
+        return
     if key == 'phonon2':
         os.environ['FERMION_CACHE_DIR'] = str(ROOT / 'models' / 'phonon')
         from fermion.transcribe import _resolve
@@ -213,7 +220,7 @@ def convert(source, output):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['download', 'transcribe', 'probe', 'convert', 'import-url'])
+    parser.add_argument('action', choices=['download', 'transcribe', 'probe', 'convert', 'import-url', 'self-test'])
     parser.add_argument('--url')
     parser.add_argument('--model', choices=BY_KEY, default='small_en')
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
@@ -223,7 +230,15 @@ def main():
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     try:
-        if args.action == 'probe':
+        if args.action == 'self-test':
+            import av, numpy, soxr, ctranslate2, faster_whisper, tokenizers, needle, fermion
+            import huggingface_hub, yt_dlp, yt_dlp_ejs, certifi
+            import torch, transformers, soundfile, scipy, safetensors
+            runtime = Path(fermion.__file__).parent / '_speech' / '_engine_phonon2' / 'fermion_container.py'
+            if not runtime.is_file():
+                raise RuntimeError('The Phonon runtime source files are missing from this build.')
+            emit('self-test', ok=True)
+        elif args.action == 'probe':
             from gpu_support import cuda_probe
             emit('probe', **cuda_probe())
         elif args.action == 'download':
